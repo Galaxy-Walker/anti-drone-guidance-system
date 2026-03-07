@@ -157,14 +157,6 @@ ros2 launch ros2_guidance_system pn_guidance_launch.py config_file:=/path/to/cus
 如果其中任一环节未完成，ROS 2 节点可能无法正常与 PX4 建立通信。
 
 
-## 许可证说明
-
-本仓库中由作者自行编写的代码和文档，采用 Apache-2.0 许可证发布。仓库根目录中的 [LICENSE](LICENSE) 为本项目自研部分的默认许可证文本。
-
-同时，本项目依赖并可能包含来自 ROS 2、PX4、px4_msgs、px4_ros_com 等第三方开源组件。这些第三方组件仍然遵循其各自原始许可证，相关权利和义务不因本仓库采用 Apache-2.0 而改变。
-
-
-
 ## 参考资料
 
 1. PX4 官方文档：https://docs.px4.io/main/en/
