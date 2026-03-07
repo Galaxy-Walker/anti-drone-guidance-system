@@ -1,0 +1,66 @@
+# ------------------------------
+# Python 缓存与构建产物
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+site/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+
+# ------------------------------
+# 虚拟环境
+# ------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ------------------------------
+# 工具 / 编辑器
+# ------------------------------
+.vscode/
+.idea/
+
+# ------------------------------
+# ROS2 / colcon 生成的文件夹
+# 保持 3_ROS2/src 下的源代码包受版本控制
+# ------------------------------
+3_ROS2/build/
+3_ROS2/install/
+3_ROS2/log/
+
+# ------------------------------
+# ROS Bag / 仿真输出（通常较大）
+# ------------------------------
+*.db3
+*.mcap
+*.bag
+*.bag.active
+
+# ------------------------------
+# 操作系统和 Windows 替换数据流（ADS）元数据文件
+# ------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.orig
+
+# Windows 区域标识符附属文件
+*:Zone.Identifier
