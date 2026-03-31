@@ -1,0 +1,22 @@
+std_msgs/Header header
+
+geometry_msgs/Vector3 uav_position
+geometry_msgs/Vector3 uav_velocity
+geometry_msgs/Vector3 uav_angular_velocity
+float64 uav_hover_thrust
+geometry_msgs/Quaternion uav_attitude
+
+geometry_msgs/Vector3 cmd_position
+geometry_msgs/Vector3 cmd_velocity
+geometry_msgs/Vector3 cmd_acceleration
+geometry_msgs/Vector3 cmd_b1d
+float64 cmd_yaw
+geometry_msgs/Quaternion cmd_attitude
+
+geometry_msgs/Vector3 control_thrust_vector
+float64 control_thrust
+geometry_msgs/Vector3 control_moment
+geometry_msgs/Vector3 control_acceleration
+geometry_msgs/Quaternion control_attitude
+geometry_msgs/Vector3 control_wd
+bool control_valid

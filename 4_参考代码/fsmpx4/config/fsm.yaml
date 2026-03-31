@@ -1,0 +1,40 @@
+#########################################################################
+# FSM PX4 Control Parameters #
+#########################################################################
+
+fsmpx4_fsm:
+  ros__parameters:
+    # 基础参数
+    ctrl_freq_max: 200.0
+    max_manual_vel: 1.0
+    use_manual_gate: false
+    manual_control_topic: false  # true=use /fmu/out/manual_control_setpoint, false=use /rc/manual_control_setpoint
+
+    # 推力映射参数
+    "thr_map.hover_percentage": 0.67
+
+    # 控制器参数 - 位置控制增益 (参考稳定控制器，降低增益避免震荡)
+    "control.Kp_x": 1.0
+    "control.Kp_y": 2.0
+    "control.Kp_z": 2.0
+    "control.Kv_x":  3.0
+    "control.Kv_y":  3.0
+    "control.Kv_z":  4.5
+    "control.Kvi_x": 0.02
+    "control.Kvi_y": 0.02
+    "control.Kvi_z": 0.1
+       
+    # 控制器参数 - 物理参数
+    "control.mass": 2.0
+    "control.gravity": 9.81
+    "control.Ixx": 0.03232
+    "control.Iyy": 0.03232
+    "control.Izz": 0.04238
+    
+    # 控制器参数 - 控制限制
+    "control.max_thrust": -0.1 # 最大推力 (向上)
+    "control.min_thrust": -0.9  # 最小推力 (向下)
+    "control.max_torque": 0.5
+    
+    # 控制器参数 - 积分控制 (暂时关闭，先稳定基础控制)
+    "control.use_integral": false

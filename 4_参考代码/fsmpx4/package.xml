@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fsmpx4</name>
+  <version>1.0.0</version>
+  <description>Advanced FSM-based PX4 control package for autonomous flight operations</description>
+  
+  <maintainer email="iszhouxin@zju.edu.cn">uav</maintainer>
+  <license>GPLv3</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Message generation dependencies -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <!-- Core ROS2 dependencies -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  
+  <!-- PX4 specific dependencies -->
+  <depend>px4_msgs</depend>
+  
+  <!-- TF2 dependencies -->
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  
+  <!-- Action dependencies -->
+  <depend>rclcpp_action</depend>
+  <depend>action_msgs</depend>
+  
+  <!-- Math libraries -->
+  <depend>eigen3_cmake_module</depend>
+  
+  <!-- Build dependencies -->
+  <build_depend>eigen</build_depend>
+  
+  <!-- Test dependencies -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+
+
+
