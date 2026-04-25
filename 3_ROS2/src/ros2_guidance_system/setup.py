@@ -33,7 +33,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'takeoff_node = ros2_guidance_system.takeoff_node:main',
             'pn_guidance_node = ros2_guidance_system.pn_guidance_node:main',
         ],
     },
