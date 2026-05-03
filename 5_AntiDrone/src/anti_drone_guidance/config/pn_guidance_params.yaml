@@ -1,0 +1,61 @@
+# ============================================================
+# 比例导引节点参数配置（仿真模式）
+#
+# 使用方法:
+#   ros2 launch anti_drone_guidance pn_guidance_launch.py
+# ============================================================
+
+pn_guidance_node:
+  ros__parameters:
+
+    # ---- 导引算法参数 ----
+    guidance:
+      N: 4.0                    # 导引比例系数（通常取 3~5，越大跟踪越激进）
+      speed_min: 2.0            # 最小速度限制 (m/s)
+      speed_max: 30.0           # 最大速度限制 (m/s)
+      strategy: 'adaptive'      # 速度策略: adaptive / pursuit
+
+    # ---- 飞行参数 ----
+    flight:
+      takeoff_height: 10.0      # 起飞高度 (m)，正值
+      intercept_radius: 0.5     # 拦截判定距离 (m)，距离小于此值认为拦截成功
+      control_freq: 20.0        # 控制频率 (Hz)
+
+    # ---- 目标源参数 ----
+    target:
+      source: 'simulated'       # 目标源类型: simulated（仿真） / ros_topic（真实传感器）
+
+      # 仿真运动类型:
+      #   circle          - 等高圆周运动
+      #   circle_altitude - 高度变化的圆周运动（水平圆周 + 正弦高度振荡）
+      #   line            - 匀速直线运动
+      #   static          - 静止悬停
+      motion_type: 'static'  # 仿真运动类型
+
+      # -- 圆周运动参数（circle / circle_altitude 共用）--
+      center_x: 50.0            # 圆周运动中心 X (m)
+      center_y: 50.0            # 圆周运动中心 Y (m)
+      radius: 30.0              # 圆周运动半径 (m)
+      omega: 0.1                # 圆周运动角速度 (rad/s)
+      altitude: 20.0            # 目标基准飞行高度 (m)，正值
+
+      # -- 高度变化参数（仅 circle_altitude 有效）--
+      altitude_amplitude: 5.0   # 高度振荡幅度 (m)
+      altitude_omega: 0.2       # 高度振荡角频率 (rad/s)
+
+      # -- 直线运动参数（仅 line 有效）--
+      line_vx: 2.0              # 直线运动速度 X (m/s)
+      line_vy: 2.0              # 直线运动速度 Y (m/s)
+      line_vz: 0.0              # 直线运动速度 Z (m/s)
+
+      # -- 初始位置（line / static 使用）--
+      start_x: 50.0             # 初始位置 X (m)
+      start_y: 50.0             # 初始位置 Y (m)
+
+      # -- ROS 话题目标源参数 --
+      timeout: 2.0              # ROS话题目标数据超时时间 (s)
+
+    # ---- 调试参数 ----
+    debug:
+      log_interval: 30          # 日志打印间隔（每 N 个控制周期打印一次）
+      verbose: True            # 是否启用详细调试日志（输出追踪者/目标详细状态）
