@@ -68,8 +68,14 @@ def speed_strategy_adaptive(
 
     设计目标：在追踪者存在不利初速度时，仍能快速建立有效接近。
     """
+    # 1) 根据距离生成一个基础速度指令：距离远 -> 速度高，距离近 -> 速度低
+    #    这里把距离限制在 [0, 250] m，避免超范围造成过激速度变化。
     dist_speed = np.interp(np.clip(r_mag, 0.0, 250.0), [0.0, 250.0], [speed_min, speed_max])
 
+    # 2) 接近速度补偿：
+    #    - vc <= 0 说明追踪者正在远离或接近速度为负，需要强力加速
+    #    - vc 很小则轻度加速
+    #    - vc 足够大则不加速
     if vc <= 0.0:
         closing_boost = 1.35
     elif vc < 0.35 * max(dist_speed, speed_min):
@@ -77,15 +83,25 @@ def speed_strategy_adaptive(
     else:
         closing_boost = 1.0
 
+    # 3) 视线角速率惩罚：
+    #    Omega 越大代表转向越急，速度太高易导致过冲，故降低速度。
+    #    下限 0.75，避免速度被压得过低。
     omega_penalty = np.clip(1.0 - omega_mag * 3.0, 0.75, 1.0)
 
+    # 4) 速度下限：
+    #    - speed_min: 系统硬下限
+    #    - 0.8 * current_base_speed: 平滑过渡，避免突降
+    #    - 1.1 * target_speed: 至少略快于目标，保证可追上
     speed_floor = max(speed_min, 0.8 * current_base_speed, 1.1 * target_speed)
+
+    # 5) 组合成最终期望速度：基础速度 + 接近补偿 + 转向惩罚，且不低于下限
     desired = max(dist_speed * closing_boost * omega_penalty, speed_floor)
 
     logger.debug(
         f"[可变速PN] dist_speed={dist_speed:.2f}, closing_boost={closing_boost:.2f}, "
         f"omega_penalty={omega_penalty:.2f}, desired={desired:.2f}"
     )
+    # 6) 最后再做一次硬限幅，确保满足速度范围约束
     return float(np.clip(desired, speed_min, speed_max))
 
 
@@ -161,7 +177,7 @@ class PNGuidanceCore:
         self, tracker_state: State, target_state: State, dt: float
     ) -> GuidanceResult:
         """
-        计算下一时刻的导引控制指令。
+        计算下一时刻的导引控制指令。实现比例导引 PNG 和追踪导引的混合策略。
 
         参数:
             tracker_state: 追踪者（己方无人机）当前状态
@@ -235,13 +251,17 @@ class PNGuidanceCore:
         vel_cmd_norm = np.linalg.norm(vel_cmd_raw)
         if vel_cmd_norm > 0:
             pn_dir = vel_cmd_raw / vel_cmd_norm
+            # 设定基础混合比例
             base_blend = 0.30
+            # 远离时增加混合以更快指向目标
             if Vc < 0:
                 extra_blend = np.clip(-Vc / max(self.desired_speed, 1e-3), 0.0, 0.45)
             else:
                 extra_blend = 0.0
             blend_to_target = base_blend + extra_blend
 
+            # pn_dir 偏向比例导引，适合拦截；
+            # R_unit 偏向直接追目标，能防止方向过于横向导致越飞越远。
             cmd_dir = (1.0 - blend_to_target) * pn_dir + blend_to_target * R_unit
             cmd_dir_norm = np.linalg.norm(cmd_dir)
             if cmd_dir_norm > 1e-6:
