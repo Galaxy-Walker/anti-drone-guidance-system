@@ -73,3 +73,7 @@ Thumbs.db
 
 # 忽略github相关文件
 .github/
+
+# 忽略仿真输出文件夹和数据
+bags/
+results.csv

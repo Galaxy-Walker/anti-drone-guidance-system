@@ -29,19 +29,21 @@
     /fmu/in/trajectory_setpoint     - 轨迹设定点
     /fmu/in/vehicle_command         - 飞控指令
   订阅:
-    /fmu/out/vehicle_local_position_v1  - 本地位置
-    /fmu/out/vehicle_status_v1          - 飞控状态
+    /fmu/out/vehicle_local_position(_v1)  - 本地位置，兼容不同 PX4/px4_msgs 话题命名
+    /fmu/out/vehicle_status(_v1)          - 飞控状态，兼容不同 PX4/px4_msgs 话题命名
     /fmu/out/vehicle_control_mode       - 控制模式确认
     /fmu/out/battery_status             - 电池状态
 """
 
 from enum import Enum, auto
+import json
 import threading
 
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from nav_msgs.msg import Odometry
 
 from px4_msgs.msg import (
     BatteryStatus,
@@ -52,12 +54,23 @@ from px4_msgs.msg import (
     VehicleLocalPosition,
     VehicleStatus,
 )
+from std_msgs.msg import String
 
 import numpy as np
 import math
 
 from .pn_guidance_core import PNGuidanceCore, State, GuidanceResult
 from .target_provider import SimulatedTarget, RosTopicTarget
+
+
+LOCAL_POSITION_TOPICS = [
+    '/fmu/out/vehicle_local_position_v1',
+    '/fmu/out/vehicle_local_position',
+]
+VEHICLE_STATUS_TOPICS = [
+    '/fmu/out/vehicle_status_v1',
+    '/fmu/out/vehicle_status',
+]
 
 
 def _get_param(node: Node, name: str):
@@ -111,7 +124,11 @@ class AntiDroneGuidanceNode(Node):
         self.declare_parameter('target.line_vz', 0.0)
         self.declare_parameter('target.start_x', 50.0)
         self.declare_parameter('target.start_y', 50.0)
+        self.declare_parameter('target.initial_phase', 0.0)
         self.declare_parameter('target.timeout', 2.0)
+
+        self.declare_parameter('evaluation.case_id', '')
+        self.declare_parameter('evaluation.enable_topics', False)
 
         self.declare_parameter('debug.log_interval', 30)
         self.declare_parameter('debug.verbose', True)
@@ -131,6 +148,8 @@ class AntiDroneGuidanceNode(Node):
 
         target_source = str(_get_param(self, 'target.source'))
         self._simulation_mode = (target_source == 'simulated')
+        self.evaluation_case_id = str(_get_param(self, 'evaluation.case_id'))
+        self.evaluation_enable_topics = bool(_get_param(self, 'evaluation.enable_topics'))
         self.log_interval = int(_get_param(self, 'debug.log_interval'))
         self.verbose = bool(_get_param(self, 'debug.verbose'))
 
@@ -142,40 +161,63 @@ class AntiDroneGuidanceNode(Node):
         # ============================================================
         # 配置 QoS
         # ============================================================
-        qos_profile = QoSProfile(
+        px4_in_qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
+        )
+        px4_out_qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        event_qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
         )
 
         # ============================================================
         # 创建发布者
         # ============================================================
         self.offboard_control_mode_pub = self.create_publisher(
-            OffboardControlMode, '/fmu/in/offboard_control_mode', qos_profile)
+            OffboardControlMode, '/fmu/in/offboard_control_mode', px4_in_qos_profile)
         self.trajectory_setpoint_pub = self.create_publisher(
-            TrajectorySetpoint, '/fmu/in/trajectory_setpoint', qos_profile)
+            TrajectorySetpoint, '/fmu/in/trajectory_setpoint', px4_in_qos_profile)
         self.vehicle_command_pub = self.create_publisher(
-            VehicleCommand, '/fmu/in/vehicle_command', qos_profile)
+            VehicleCommand, '/fmu/in/vehicle_command', px4_in_qos_profile)
+        self.target_state_pub = None
+        self.evaluation_event_pub = None
+        if self.evaluation_enable_topics:
+            # 评估模式下额外发布虚拟目标真值，普通飞行默认不创建该话题。
+            self.target_state_pub = self.create_publisher(
+                Odometry, '/anti_drone_guidance/target_state', 10)
+            # 事件使用可靠 QoS，保证 rosbag 能记录关键阶段切换。
+            self.evaluation_event_pub = self.create_publisher(
+                String, '/anti_drone_guidance/evaluation_event', event_qos_profile)
 
         self.get_logger().info("发布者已创建: offboard_control_mode, trajectory_setpoint, vehicle_command")
 
         # ============================================================
         # 创建订阅者
         # ============================================================
-        self.create_subscription(
-            VehicleLocalPosition, '/fmu/out/vehicle_local_position_v1',
-            self._on_vehicle_local_position, qos_profile)
-        self.create_subscription(
-            VehicleStatus, '/fmu/out/vehicle_status_v1',
-            self._on_vehicle_status, qos_profile)
+        # local_position/status 在不同 PX4/px4_msgs 组合里可能带 _v1，也可能不带。
+        # 同时订阅两个候选名，哪个有数据就用哪个，避免节点因话题名版本差异无法起飞。
+        for topic in LOCAL_POSITION_TOPICS:
+            self.create_subscription(
+                VehicleLocalPosition, topic, self._on_vehicle_local_position, px4_out_qos_profile)
+        for topic in VEHICLE_STATUS_TOPICS:
+            self.create_subscription(
+                VehicleStatus, topic, self._on_vehicle_status, px4_out_qos_profile)
         self.create_subscription(
             VehicleControlMode, '/fmu/out/vehicle_control_mode',
-            self._on_vehicle_control_mode, qos_profile)
+            self._on_vehicle_control_mode, px4_out_qos_profile)
         self.create_subscription(
             BatteryStatus, '/fmu/out/battery_status',
-            self._on_battery_status, qos_profile)
+            self._on_battery_status, px4_out_qos_profile)
 
         self.get_logger().info(
             "订阅者已创建: vehicle_local_position, vehicle_status, vehicle_control_mode, battery_status"
@@ -243,6 +285,7 @@ class AntiDroneGuidanceNode(Node):
                 ],
                 'radius': float(_get_param(self, 'target.radius')),
                 'omega': float(_get_param(self, 'target.omega')),
+                'initial_phase': float(_get_param(self, 'target.initial_phase')),
                 'altitude': -abs(float(_get_param(self, 'target.altitude'))),
                 'altitude_amplitude': float(_get_param(self, 'target.altitude_amplitude')),
                 'altitude_omega': float(_get_param(self, 'target.altitude_omega')),
@@ -283,6 +326,8 @@ class AntiDroneGuidanceNode(Node):
         self.get_logger().info(f"  拦截判定距离 = {self.intercept_radius} m")
         self.get_logger().info(f"  控制频率 = {control_freq} Hz (dt={self.dt:.3f}s)")
         self.get_logger().info(f"  目标源 = {target_source}")
+        if self.evaluation_enable_topics:
+            self.get_logger().info(f"  评估话题 = 启用，case_id = {self.evaluation_case_id}")
         self.get_logger().info(f"  日志间隔 = 每 {self.log_interval} 周期")
 
         # ============================================================
@@ -290,6 +335,7 @@ class AntiDroneGuidanceNode(Node):
         # ============================================================
         self.timer = self.create_timer(self.dt, self._control_loop)
         self.get_logger().info(f"控制回路定时器已启动，等待飞控连接...")
+        self._publish_evaluation_event("case_started")
 
     # ================================================================
     # 订阅回调
@@ -434,6 +480,53 @@ class AntiDroneGuidanceNode(Node):
         )
 
     # ================================================================
+    # 评估话题
+    # ================================================================
+
+    def _publish_evaluation_event(self, event: str, **fields):
+        """发布评估事件。
+
+        事件内容使用 JSON 字符串，便于 rosbag 记录后由脚本离线解析；case_id
+        用于把多轮评估的数据隔离开。
+        """
+
+        if not self.evaluation_enable_topics or self.evaluation_event_pub is None:
+            return
+
+        payload = {
+            "event": event,
+            "case_id": self.evaluation_case_id,
+            "stamp": self.get_clock().now().nanoseconds / 1e9,
+        }
+        payload.update(fields)
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        self.evaluation_event_pub.publish(msg)
+
+    def _publish_target_state(self, target_state: State):
+        """发布虚拟目标真值。
+
+        目标不是 Gazebo 模型，因此评估器不能从 Gazebo 读取目标状态；这里将
+        ROS2 内部 SimulatedTarget 的位置和速度转换为 Odometry 作为唯一真值源。
+        """
+
+        if not self.evaluation_enable_topics or self.target_state_pub is None:
+            return
+
+        msg = Odometry()
+        now = self.get_clock().now().to_msg()
+        msg.header.stamp = now
+        msg.header.frame_id = "map"
+        msg.child_frame_id = "target"
+        msg.pose.pose.position.x = float(target_state.position[0])
+        msg.pose.pose.position.y = float(target_state.position[1])
+        msg.pose.pose.position.z = float(target_state.position[2])
+        msg.twist.twist.linear.x = float(target_state.velocity[0])
+        msg.twist.twist.linear.y = float(target_state.velocity[1])
+        msg.twist.twist.linear.z = float(target_state.velocity[2])
+        self.target_state_pub.publish(msg)
+
+    # ================================================================
     # 安全机制
     # ================================================================
 
@@ -568,6 +661,8 @@ class AntiDroneGuidanceNode(Node):
             self.get_logger().info(f"起飞完成！当前高度 {-current_z:.1f}m，开始导引追踪")
             self._guidance_subphase = "GUIDANCE"
             self.get_logger().info("导引子阶段切换: TAKEOFF -> GUIDANCE")
+            # 评估指标从 GUIDANCE 阶段开始，起飞耗时单独统计。
+            self._publish_evaluation_event("guidance_started")
 
     def _handle_guidance(self):
         self.target_provider.update(self.dt)
@@ -578,15 +673,21 @@ class AntiDroneGuidanceNode(Node):
             return
 
         target_state = self.target_provider.get_state()
+        # 每个导引周期同步发布目标真值，评估器用它计算真实距离。
+        self._publish_target_state(target_state)
         dist = float(np.linalg.norm(target_state.position - self.tracker_state.position))
 
         if dist < self.intercept_radius:
             self.get_logger().info("=" * 40)
             self.get_logger().info(f"拦截成功！距离={dist:.2f}m，执行降落")
             self.get_logger().info("=" * 40)
+            # 成功、降落和结束分成三个事件，方便离线分析阶段边界。
+            self._publish_evaluation_event("intercept_success", distance=dist)
             self._guidance_subphase = "LAND"
             self.get_logger().info("导引子阶段切换: GUIDANCE -> LAND")
+            self._publish_evaluation_event("land_started", distance=dist)
             self._land()
+            self._publish_evaluation_event("case_finished", success=True, distance=dist)
             return
 
         result: GuidanceResult = self.guidance_core.calculate_guidance(
@@ -636,6 +737,9 @@ class AntiDroneGuidanceNode(Node):
     def _control_loop(self):
         # 始终发送心跳
         self._publish_offboard_heartbeat()
+        if self.evaluation_enable_topics and self.target_provider.is_valid():
+            # TAKEOFF 阶段也发布目标真值，让 rosbag 中有完整目标轨迹。
+            self._publish_target_state(self.target_provider.get_state())
 
         # 电池安全检查（仿真模式下跳过）
         if not self._simulation_mode:

@@ -51,9 +51,15 @@ pn_guidance_node:
       # -- 初始位置（line / static 使用）--
       start_x: 50.0             # 初始位置 X (m)
       start_y: 50.0             # 初始位置 Y (m)
+      initial_phase: 0.0        # 圆周运动初始相位 (rad)，用于评估矩阵控制初始航向
 
       # -- ROS 话题目标源参数 --
       timeout: 2.0              # ROS话题目标数据超时时间 (s)
+
+    # ---- 评估参数 ----
+    evaluation:
+      case_id: ''               # 评估器注入的 case id，普通运行可留空
+      enable_topics: False      # True 时发布目标真值和评估事件话题
 
     # ---- 调试参数 ----
     debug:

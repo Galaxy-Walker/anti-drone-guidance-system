@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'anti_drone_guidance_node = anti_drone_guidance.anti_drone_guidance_node:main',
+            'gazebo_evaluator = anti_drone_guidance.gazebo_evaluator:main',
         ],
     },
 )

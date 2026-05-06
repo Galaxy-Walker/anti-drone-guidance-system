@@ -112,6 +112,7 @@ class SimulatedTarget(TargetProviderBase):
         center: 圆周运动中心点 [x, y] (m)
         radius: 圆周运动半径 (m)
         omega: 圆周运动角速度 (rad/s)
+        initial_phase: 圆周运动初始相位 (rad)
         altitude: 基准飞行高度 (NED 下为负值, m)
         altitude_amplitude: 高度振荡幅度 (m)，仅 circle_altitude 有效
         altitude_omega: 高度振荡角频率 (rad/s)，仅 circle_altitude 有效
@@ -126,6 +127,7 @@ class SimulatedTarget(TargetProviderBase):
         center: Optional[list] = None,
         radius: float = 30.0,
         omega: float = 0.1,
+        initial_phase: float = 0.0,
         altitude: float = -20.0,
         altitude_amplitude: float = 5.0,
         altitude_omega: float = 0.2,
@@ -137,6 +139,8 @@ class SimulatedTarget(TargetProviderBase):
         self.center = center or [50.0, 50.0]
         self.radius = radius
         self.omega = omega
+        # initial_phase 只影响圆周类轨迹，用于评估矩阵指定目标初始切向方向。
+        self.initial_phase = initial_phase
         self.altitude = altitude
         self.altitude_amplitude = altitude_amplitude
         self.altitude_omega = altitude_omega
@@ -150,6 +154,8 @@ class SimulatedTarget(TargetProviderBase):
             velocity=np.zeros(3),
             speed=0.0,
         )
+        # 初始化后立即刷新一次，使 t=0 时的圆周目标位置/速度与相位参数一致。
+        self._refresh_state()
 
         # 打印创建信息
         self._log_creation_info()
@@ -187,6 +193,7 @@ class SimulatedTarget(TargetProviderBase):
             center=merged.get('center'),
             radius=float(merged.get('radius', 30.0)),
             omega=float(merged.get('omega', 0.1)),
+            initial_phase=float(merged.get('initial_phase', 0.0)),
             altitude=float(merged.get('altitude', -20.0)),
             altitude_amplitude=float(merged.get('altitude_amplitude', 5.0)),
             altitude_omega=float(merged.get('altitude_omega', 0.2)),
@@ -210,10 +217,11 @@ class SimulatedTarget(TargetProviderBase):
         elif self.motion_type == 'circle':
             self._log(f"{base}, 中心={self.center}, "
                        f"半径={self.radius}m, 角速度={self.omega}rad/s, "
-                       f"高度={-self.altitude}m")
+                       f"初始相位={self.initial_phase:.3f}rad, 高度={-self.altitude}m")
         elif self.motion_type == 'circle_altitude':
             self._log(f"{base}, 中心={self.center}, "
                        f"半径={self.radius}m, 角速度={self.omega}rad/s, "
+                       f"初始相位={self.initial_phase:.3f}rad, "
                        f"基准高度={-self.altitude}m, "
                        f"高度振幅={self.altitude_amplitude}m, "
                        f"高度角频率={self.altitude_omega}rad/s")
@@ -227,7 +235,10 @@ class SimulatedTarget(TargetProviderBase):
     def update(self, dt: float):
         """按照设定的运动模式推进目标状态。"""
         self.sim_time += dt
+        self._refresh_state()
 
+    def _refresh_state(self):
+        """根据当前仿真时间刷新目标状态，不推进时间。"""
         if self.motion_type == 'static':
             self._update_static()
         elif self.motion_type == 'line':
@@ -256,13 +267,15 @@ class SimulatedTarget(TargetProviderBase):
     def _update_circle(self):
         """等高圆周运动：在恒定高度上做匀速圆周运动。"""
         t = self.sim_time
+        # phase 表示当前位置半径相位；速度方向自然是该相位的切向方向。
+        phase = self.initial_phase + self.omega * t
         cx, cy = self.center
-        self._state.position[0] = cx + self.radius * math.cos(self.omega * t)
-        self._state.position[1] = cy + self.radius * math.sin(self.omega * t)
+        self._state.position[0] = cx + self.radius * math.cos(phase)
+        self._state.position[1] = cy + self.radius * math.sin(phase)
         self._state.position[2] = self.altitude
 
-        self._state.velocity[0] = -self.radius * self.omega * math.sin(self.omega * t)
-        self._state.velocity[1] = self.radius * self.omega * math.cos(self.omega * t)
+        self._state.velocity[0] = -self.radius * self.omega * math.sin(phase)
+        self._state.velocity[1] = self.radius * self.omega * math.cos(phase)
         self._state.velocity[2] = 0.0
 
     def _update_circle_altitude(self):
@@ -274,18 +287,20 @@ class SimulatedTarget(TargetProviderBase):
         所以减去正弦项表示高度上升。
         """
         t = self.sim_time
+        # 高度振荡和水平圆周共享仿真时间，但水平初始相位可独立配置。
+        phase = self.initial_phase + self.omega * t
         cx, cy = self.center
 
         # 水平圆周
-        self._state.position[0] = cx + self.radius * math.cos(self.omega * t)
-        self._state.position[1] = cy + self.radius * math.sin(self.omega * t)
+        self._state.position[0] = cx + self.radius * math.cos(phase)
+        self._state.position[1] = cy + self.radius * math.sin(phase)
         # 高度正弦振荡
         self._state.position[2] = (
             self.altitude - self.altitude_amplitude * math.sin(self.altitude_omega * t)
         )
 
-        self._state.velocity[0] = -self.radius * self.omega * math.sin(self.omega * t)
-        self._state.velocity[1] = self.radius * self.omega * math.cos(self.omega * t)
+        self._state.velocity[0] = -self.radius * self.omega * math.sin(phase)
+        self._state.velocity[1] = self.radius * self.omega * math.cos(phase)
         self._state.velocity[2] = (
             -self.altitude_amplitude * self.altitude_omega * math.cos(self.altitude_omega * t)
         )
