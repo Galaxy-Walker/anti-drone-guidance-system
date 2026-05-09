@@ -71,9 +71,16 @@ Thumbs.db
 # Windows 区域标识符附属文件
 *:Zone.Identifier
 
-# 忽略github相关文件
+# 忽略 github 相关文件
 .github/
 
 # 忽略仿真输出文件夹和数据
 bags/
 results.csv
+
+# 忽略 log 文件
+*.log
+
+# 忽略 codex 文件夹
+.codex/
+.agents/
