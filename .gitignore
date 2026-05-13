@@ -84,3 +84,11 @@ results.csv
 # 忽略 codex 文件夹
 .codex/
 .agents/
+
+# ROS2 colcon outputs
+install/
+log/
+
+# Simulation outputs
+outputs/
+outputs_verify/
