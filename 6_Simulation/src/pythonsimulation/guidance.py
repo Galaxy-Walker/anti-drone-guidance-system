@@ -44,7 +44,7 @@ def direct_pursuit(pursuer: PursuerState, target: TargetState, config: Simulatio
 
 def pn_guidance(pursuer: PursuerState, target: TargetState, config: SimulationConfig) -> np.ndarray:
     guidance = config.guidance
-    # r 是从追踪机指向目标的相对位置，LOS 是 line-of-sight（视线）方向。
+    # r 是从追踪机指向目标的相对位置，LOS 是视线方向。
     r = target.position - pursuer.position
     r_norm = norm(r)
     if r_norm < EPS:
@@ -120,7 +120,7 @@ def _target_reference_for_fov(
     dt: float,
 ) -> TargetState:
     if visible or memory.last_seen_target is None:
-        # 看得见目标时刷新 last-seen；第一次看不见时也用真实目标初始化，避免空引用。
+        # 看得见目标时刷新最后观测状态；第一次看不见时也用真实目标初始化，避免空引用。
         memory.last_seen_target = target.copy()
         memory.lost_time = 0.0
         return target
@@ -356,7 +356,7 @@ def _candidate_accelerations(
 ) -> list[np.ndarray]:
     a_max = config.pursuer.a_max
     r_unit = normalize(target.position - pursuer.position)
-    # intercept 候选偏向快速接近目标；velocity_match 候选偏向捕获后跟随目标运动。
+    # “拦截”候选偏向快速接近目标；“速度匹配”候选偏向捕获后跟随目标运动。
     intercept_velocity = config.guidance.pn_v_des_along_los * r_unit
     intercept = (intercept_velocity - pursuer.velocity) / max(config.guidance.direct_tau, EPS)
     velocity_match = (target.velocity - pursuer.velocity) / max(config.guidance.direct_tau, EPS)
@@ -373,13 +373,13 @@ def _candidate_accelerations(
         # 较小/较大增益：测试同一方向上保守一点或激进一点是否更好。
         0.55 * pn_trend,
         1.25 * pn_trend,
-        # 混入 intercept：让候选更偏向直接接近目标，帮助减小最终距离。
+        # 混入“拦截”分量：让候选更偏向直接接近目标，帮助减小最终距离。
         0.75 * pn_trend + 0.25 * intercept,
         0.5 * pn_trend + 0.5 * intercept,
-        # velocity_match：接近目标后尝试匹配目标速度，减少飞过目标导致的视场丢失。
+        # “速度匹配”：接近目标后尝试匹配目标速度，减少飞过目标导致的视场丢失。
         velocity_match,
         0.5 * pn_trend + 0.5 * velocity_match,
-        # lateral/vertical_lateral 扰动：不是随机扰动，而是沿 LOS 垂直方向的固定试探。
+        # 横向/竖向横向扰动：不是随机扰动，而是沿 LOS 垂直方向的固定试探。
         pn_trend + 0.35 * a_max * lateral,
         pn_trend - 0.35 * a_max * lateral,
         pn_trend + 0.25 * a_max * vertical_lateral,
@@ -409,7 +409,7 @@ def _rollout_cost(
 
     for step in range(1, guidance.horizon_steps + 1):
         t_pred = step * guidance.mpc_dt
-        # 预测目标未来位置时只用 last-seen 状态的常速度模型，避免使用真实未来轨迹作弊。
+        # 预测目标未来位置时只用最后观测状态的常速度模型，避免使用真实未来轨迹作弊。
         predicted_position = target.position + target.velocity * t_pred
         # 在候选加速度下前向模拟追踪机，得到预测窗口内的状态序列。
         state = step_pursuer(state, acceleration, predicted_position, config, guidance.mpc_dt)
@@ -425,13 +425,13 @@ def _rollout_cost(
         if los_angle > guidance.fov_half_angle:
             # 超出视场越多，惩罚越大；平方项会更强烈惩罚大角度丢失。
             fov_cost += (los_angle - guidance.fov_half_angle) ** 2
-        # path_cost 累计整个预测窗口内的距离；final_distance 只看窗口最后一步。
+        # 路径代价累计整个预测窗口内的距离；最终距离只看窗口最后一步。
         path_cost += distance
-        # control_cost 惩罚“费力”的控制；这里乘 mpc_dt 近似连续时间积分。
+        # 控制代价惩罚“费力”的控制；这里乘 mpc_dt 近似连续时间积分。
         control_cost += norm(acceleration) ** 2 * guidance.mpc_dt
-        # smooth_cost 惩罚当前候选与上一控制差太多，减少加速度突变。
+        # 平滑代价惩罚当前候选与上一控制差太多，减少加速度突变。
         smooth_cost += norm(acceleration - previous_acceleration) ** 2
-        # pn_cost 惩罚候选偏离 PN 趋势太远，使 NMPC 保持“PN 外环增强”的定位。
+        # PN 代价惩罚候选偏离 PN 趋势太远，使 NMPC 保持“PN 外环增强”的定位。
         pn_cost += norm(acceleration - pn_trend) ** 2
         previous_acceleration = acceleration
 

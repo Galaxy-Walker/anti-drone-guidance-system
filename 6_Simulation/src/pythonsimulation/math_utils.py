@@ -86,6 +86,6 @@ def fov_visibility(
     fov_half_angle: float,
 ) -> tuple[bool, float]:
     target_direction = np.asarray(target_position, dtype=float) - np.asarray(observer_position, dtype=float)
-    # LOS angle 是“相机前向”和“目标方向”的夹角，小于半视场角才算看得见。
+    # LOS 夹角是“相机前向”和“目标方向”的夹角，小于半视场角才算看得见。
     los_angle = angle_between(forward_from_yaw_pitch(yaw, pitch), target_direction)
     return los_angle <= fov_half_angle, los_angle

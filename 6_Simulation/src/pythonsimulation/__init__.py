@@ -1,4 +1,4 @@
-"""Lightweight 3D pursuit simulation package."""
+"""轻量级三维追踪仿真包。"""
 
 __all__ = [
     "config",

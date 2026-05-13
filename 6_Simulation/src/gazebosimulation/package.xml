@@ -7,17 +7,21 @@
   <maintainer email="user@example.com">Anti-Drone</maintainer>
   <license>MIT</license>
 
+  <!-- ament_python 告诉 colcon 该包通过 setup.py 安装。 -->
   <buildtool_depend>ament_python</buildtool_depend>
 
+  <!-- gazebosimulation.guidance_node 运行时依赖。 -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>px4_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 
+  <!-- 标准 ROS 2 Python 包检查依赖。 -->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
 
   <export>
+    <!-- 告诉 ROS 工具该包使用 Python 构建类型。 -->
     <build_type>ament_python</build_type>
   </export>
 </package>

@@ -34,7 +34,7 @@ class TargetState:
     acceleration: np.ndarray
 
     def copy(self) -> "TargetState":
-        # FOV last-seen 记忆会长期保存目标状态，所以也要复制数组，避免引用共享。
+    # FOV 的最后观测记忆会长期保存目标状态，所以也要复制数组，避免引用共享。
         return TargetState(self.position.copy(), self.velocity.copy(), self.acceleration.copy())
 
 

@@ -1,94 +1,101 @@
-# ------------------------------
-# Python 缓存与构建产物
-# ------------------------------
+# Python 字节码和缓存
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 *.pyd
-*.egg-info/
-.eggs/
-dist/
-build/
-site/
-htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .hypothesis/
+.tox/
+.nox/
+
+# Python 构建、打包和覆盖率产物
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+htmlcov/
 .coverage
 .coverage.*
+coverage.xml
+*.cover
+*.py,cover
 
-# ------------------------------
-# 虚拟环境
-# ------------------------------
+# 虚拟环境和本地 Python 工具文件
 .venv/
 venv/
 env/
 ENV/
 .python-version
+.ipynb_checkpoints/
 
-# ------------------------------
-# 工具 / 编辑器
-# ------------------------------
-.vscode/
-.idea/
+# 环境变量和本地密钥文件
+.env
+.env.*
+!.env.example
+!.env.sample
 
-# ------------------------------
-# ROS2 / colcon 生成的文件夹
-# 统一忽略 3_ROS2、4_fsm、5_AntiDrone 工作区的构建产物
-# ------------------------------
-[345]_*/install/
-[345]_*/log/
+# ROS2 / colcon 生成产物
+install/
+log/
 
-# ------------------------------
-# 忽略第三方依赖包（按工作区统一规则）
-# ------------------------------
-[345]_*/src/px4_ros_com/
-[345]_*/src/px4_msgs/
+# CMake 生成产物
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+*.o
+*.obj
+*.a
+*.dll
+*.dylib
+*.exe
 
+# ROS 工作区中的第三方 PX4 消息和桥接包
+[3456]_*/src/px4_ros_com/
+[3456]_*/src/px4_msgs/
 
-# ------------------------------
-# ROS Bag / 仿真输出（通常较大）
-# ------------------------------
+# ROS bag 和仿真输出
 *.db3
 *.mcap
 *.bag
 *.bag.active
+bags/
+outputs/
+outputs_verify/
+results.csv
 
-# ------------------------------
-# 操作系统和 Windows 替换数据流（ADS）元数据文件
-# ------------------------------
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
+# 日志和临时文件
+*.log
 *.tmp
 *.bak
 *.orig
+*.swp
+*.swo
+*~
 
-# Windows 区域标识符附属文件
-*:Zone.Identifier
-
-# 忽略 github 相关文件
-.github/
-
-# 忽略仿真输出文件夹和数据
-bags/
-results.csv
-
-# 忽略 log 文件
-*.log
-
-# 忽略 codex 文件夹
+# 编辑器和本地代理状态
+.vscode/
+.idea/
 .codex/
 .agents/
 
-# ROS2 colcon outputs
-install/
-log/
-
-# Simulation outputs
-outputs/
-outputs_verify/
+# 操作系统元数据
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+*:Zone.Identifier

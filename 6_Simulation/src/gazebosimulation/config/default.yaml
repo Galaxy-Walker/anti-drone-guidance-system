@@ -1,14 +1,28 @@
 guidance_node:
   ros__parameters:
+    # 复用 pythonsimulation.config.ALGORITHMS 中定义的导引算法。
     algorithm: pn_fov_mppi
+    # 复用 pythonsimulation.config.SCENARIOS 中定义的目标参考轨迹。
     scenario: circle
+
+    # 发布 Offboard 心跳和轨迹 setpoint 的定时器频率。
     control_rate_hz: 20.0
+
+    # PX4 话题 namespace，必须匹配 SITL/uXRCE-DDS 实例名称。
     pursuer_namespace: /px4_1
     target_namespace: /px4_2
+
+    # 如果设为 false，则需要手动处理解锁/Offboard 模式，例如在 QGC 中操作。
     auto_arm: true
     auto_offboard: true
+
+    # 请求 Offboard 模式前需要预先发布的 setpoint 周期数。
     offboard_warmup_cycles: 20
+
+    # 目标参考和导引桥接使用的 SimulationConfig 时间参数。
     sim_time: 40.0
     dt: 0.05
+
+    # 追踪机和目标机 PX4 实例的 MAVLink system id。
     pursuer_system_id: 1
     target_system_id: 2
