@@ -1,0 +1,14 @@
+guidance_node:
+  ros__parameters:
+    algorithm: pn_fov_mppi
+    scenario: circle
+    control_rate_hz: 20.0
+    pursuer_namespace: /px4_1
+    target_namespace: /px4_2
+    auto_arm: true
+    auto_offboard: true
+    offboard_warmup_cycles: 20
+    sim_time: 40.0
+    dt: 0.05
+    pursuer_system_id: 1
+    target_system_id: 2
