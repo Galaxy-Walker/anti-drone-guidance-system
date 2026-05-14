@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import csv
 import sys
 from pathlib import Path
 
@@ -46,13 +47,14 @@ def _as_bool(value: object) -> bool:
 
 import rclpy
 from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand, VehicleOdometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from pythonsimulation.config import ALGORITHMS, SCENARIOS, SimulationConfig
 from pythonsimulation.guidance import GuidanceMemory, compute_guidance
 from pythonsimulation.math_utils import clamp_norm
-from pythonsimulation.state import PursuerState, TargetState
+from pythonsimulation.state import PursuerState, SimulationResult, TargetState
 from pythonsimulation.target import target_state
 
 from gazebosimulation.coordinates import (
@@ -102,6 +104,21 @@ class GuidanceNode(Node):
         # 当目标参考速度接近 0 时复用上一帧 yaw，避免静止目标因为 atan2 数值噪声乱转。
         self._target_yaw_enu = 0.0
         self._waiting_logged = False
+        self._record_samples: list[
+            tuple[
+                float,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                float,
+                float,
+                float,
+                bool,
+                float,
+            ]
+        ] = []
 
         # PX4 uXRCE-DDS 车辆话题通常使用 best-effort 和 transient local；发布/订阅端
         # 使用一致 QoS，可以提高不同 PX4/px4_msgs 组合下的话题匹配成功率。
@@ -191,6 +208,10 @@ class GuidanceNode(Node):
         self.declare_parameter("pursuer_system_id", 1)
         self.declare_parameter("target_system_id", 2)
 
+        # Gazebo 实飞/仿真数据记录：节点只保存原始 CSV，绘图由普通 Python 脚本后处理。
+        self.declare_parameter("record_data", True)
+        self.declare_parameter("record_output_dir", "outputs/gazebo")
+
     def _load_parameters(self) -> None:
         """读取 ROS 参数，校验选项，并创建共享配置。"""
         self._algorithm = str(self.get_parameter("algorithm").value)
@@ -215,6 +236,8 @@ class GuidanceNode(Node):
         self._offboard_warmup_cycles = int(self.get_parameter("offboard_warmup_cycles").value)
         self._pursuer_system_id = int(self.get_parameter("pursuer_system_id").value)
         self._target_system_id = int(self.get_parameter("target_system_id").value)
+        self._record_data = _as_bool(self.get_parameter("record_data").value)
+        self._record_output_dir = Path(str(self.get_parameter("record_output_dir").value)).expanduser()
 
     def _pursuer_odometry_callback(self, message: VehicleOdometry) -> None:
         """把追踪机 PX4 NED 里程计转换到 ENU 后缓存。"""
@@ -267,10 +290,140 @@ class GuidanceNode(Node):
         # 离线仿真在动力学中使用同样的加速度限制；桥接节点在转换为 PX4 setpoint 前先限幅。
         applied_acceleration = clamp_norm(guidance.acceleration, self._config.pursuer.a_max)
         self._memory.previous_acceleration = applied_acceleration.copy()
+        self._record_sample(elapsed, applied_acceleration, guidance.visible, guidance.los_angle)
 
         self._publish_target_setpoint(now_us, target_reference)
         self._publish_pursuer_setpoint(now_us, applied_acceleration, guidance.look_at_position)
         self._publish_mode_commands(now_us)
+
+    def _record_sample(
+        self,
+        elapsed: float,
+        acceleration_enu: np.ndarray,
+        visible: bool,
+        los_angle: float,
+    ) -> None:
+        """按控制周期保存一帧 Gazebo/PX4 闭环数据，供退出时写入 CSV。"""
+        if not self._record_data:
+            return
+        if self._record_samples and elapsed <= self._record_samples[-1][0]:
+            return
+
+        distance = float(np.linalg.norm(self._target.position - self._pursuer.position))
+        self._record_samples.append(
+            (
+                float(elapsed),
+                self._pursuer.position.copy(),
+                self._pursuer.velocity.copy(),
+                self._target.position.copy(),
+                self._target.velocity.copy(),
+                acceleration_enu.copy(),
+                float(self._pursuer.yaw),
+                float(self._pursuer.pitch),
+                distance,
+                bool(visible),
+                float(los_angle),
+            )
+        )
+
+    def save_recording(self) -> None:
+        """节点退出时只把 Gazebo 话题数据保存成 CSV。"""
+        if not self._record_data:
+            return
+        if not self._record_samples:
+            self._log_shutdown_safe("warn", "record_data is enabled, but no Gazebo samples were collected")
+            return
+
+        try:
+            result = self._recording_result()
+            output_dir = self._record_output_dir / self._scenario / self._algorithm
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            self._write_recording_csv(result, output_dir / "gazebo_samples.csv")
+
+            self._log_shutdown_safe("info", f"saved Gazebo recording CSV to {output_dir / 'gazebo_samples.csv'}")
+        except Exception as exc:  # noqa: BLE001 - 退出阶段不能让保存失败吞掉 shutdown。
+            self._log_shutdown_safe("error", f"failed to save Gazebo recording: {exc}")
+
+    def _log_shutdown_safe(self, level: str, message: str) -> None:
+        """launch 收到 Ctrl+C 时 ROS context 可能已失效，此时改用 stdout/stderr。"""
+        if rclpy.ok():
+            getattr(self.get_logger(), level)(message)
+            return
+        stream = sys.stderr if level == "error" else sys.stdout
+        print(f"[{level.upper()}] [guidance_node]: {message}", file=stream)
+
+    def _recording_result(self) -> SimulationResult:
+        times = np.array([sample[0] for sample in self._record_samples], dtype=float)
+        return SimulationResult(
+            scenario=self._scenario,
+            algorithm=self._algorithm,
+            time=times,
+            pursuer_position=np.array([sample[1] for sample in self._record_samples]),
+            pursuer_velocity=np.array([sample[2] for sample in self._record_samples]),
+            target_position=np.array([sample[3] for sample in self._record_samples]),
+            target_velocity=np.array([sample[4] for sample in self._record_samples]),
+            acceleration=np.array([sample[5] for sample in self._record_samples]),
+            yaw=np.array([sample[6] for sample in self._record_samples], dtype=float),
+            pitch=np.array([sample[7] for sample in self._record_samples], dtype=float),
+            distance=np.array([sample[8] for sample in self._record_samples], dtype=float),
+            visible=np.array([sample[9] for sample in self._record_samples], dtype=bool),
+            los_angle=np.array([sample[10] for sample in self._record_samples], dtype=float),
+        )
+
+    def _write_recording_csv(self, result: SimulationResult, path: Path) -> None:
+        fieldnames = (
+            "time",
+            "pursuer_x",
+            "pursuer_y",
+            "pursuer_z",
+            "pursuer_vx",
+            "pursuer_vy",
+            "pursuer_vz",
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_vx",
+            "target_vy",
+            "target_vz",
+            "acceleration_x",
+            "acceleration_y",
+            "acceleration_z",
+            "yaw",
+            "pitch",
+            "distance",
+            "visible",
+            "los_angle",
+        )
+        with path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            for index, time_value in enumerate(result.time):
+                writer.writerow(
+                    {
+                        "time": float(time_value),
+                        "pursuer_x": float(result.pursuer_position[index, 0]),
+                        "pursuer_y": float(result.pursuer_position[index, 1]),
+                        "pursuer_z": float(result.pursuer_position[index, 2]),
+                        "pursuer_vx": float(result.pursuer_velocity[index, 0]),
+                        "pursuer_vy": float(result.pursuer_velocity[index, 1]),
+                        "pursuer_vz": float(result.pursuer_velocity[index, 2]),
+                        "target_x": float(result.target_position[index, 0]),
+                        "target_y": float(result.target_position[index, 1]),
+                        "target_z": float(result.target_position[index, 2]),
+                        "target_vx": float(result.target_velocity[index, 0]),
+                        "target_vy": float(result.target_velocity[index, 1]),
+                        "target_vz": float(result.target_velocity[index, 2]),
+                        "acceleration_x": float(result.acceleration[index, 0]),
+                        "acceleration_y": float(result.acceleration[index, 1]),
+                        "acceleration_z": float(result.acceleration[index, 2]),
+                        "yaw": float(result.yaw[index]),
+                        "pitch": float(result.pitch[index]),
+                        "distance": float(result.distance[index]),
+                        "visible": bool(result.visible[index]),
+                        "los_angle": float(result.los_angle[index]),
+                    }
+                )
 
     def _elapsed_seconds(self) -> float:
         """返回场景时间，从第一个有效控制周期开始计时。"""
@@ -364,9 +517,13 @@ def main(args: list[str] | None = None) -> None:
     node = GuidanceNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
+        node.save_recording()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

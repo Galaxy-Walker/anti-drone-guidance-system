@@ -26,3 +26,7 @@ guidance_node:
     # 追踪机和目标机 PX4 实例的 MAVLink system id。
     pursuer_system_id: 1
     target_system_id: 2
+
+    # 仿真退出时只保存 Gazebo/PX4 闭环 CSV；绘图使用 6_Simulation/plot_gazebo_csv.py 后处理。
+    record_data: true
+    record_output_dir: outputs/gazebo

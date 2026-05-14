@@ -51,7 +51,15 @@ def _plot_trajectory_3d(
     config: SimulationConfig,
 ) -> None:
     fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection="3d")
+    try:
+        ax = fig.add_subplot(111, projection="3d")
+    except ValueError as exc:
+        plt.close(fig)
+        (output_dir / "trajectory_3d_skipped.txt").write_text(
+            f"Skipped trajectory_3d.png because Matplotlib 3D projection is unavailable: {exc}\n",
+            encoding="utf-8",
+        )
+        return
     # 目标轨迹对所有算法相同，所以拿第一个 result 中的 target_position 画一次即可。
     first = next(iter(results.values()))
     ax.plot(first.target_position[:, 0], first.target_position[:, 1], first.target_position[:, 2], "k--", label="Target")

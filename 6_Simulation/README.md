@@ -265,8 +265,46 @@ ros2 launch gazebosimulation guidance.launch.py \
   target_namespace:=/px4_2 \
   auto_arm:=true \
   auto_offboard:=true \
-  offboard_warmup_cycles:=20
+  offboard_warmup_cycles:=20 \
+  record_data:=true \
+  record_output_dir:=outputs/gazebo
 ```
+
+### Gazebo 数据记录与绘图
+
+`guidance_node` 默认会在节点退出时保存一次 Gazebo/PX4 闭环 CSV。输出路径为：
+
+```text
+outputs/gazebo/<scenario>/<algorithm>/gazebo_samples.csv
+```
+
+CSV 内容包含控制周期采样的追踪机/目标机 ENU 位置、速度、导引加速度、yaw、pitch、距离、FOV 可见性和 LOS 角。
+
+仿真结束后，在普通 Python/uv 环境中单独生成指标和图片：
+
+```bash
+cd 6_Simulation
+uv run python plot_gazebo_csv.py outputs/gazebo/circle/pn_fov_nmpc/gazebo_samples.csv
+```
+
+后处理输出目录默认就是 CSV 所在目录，包含：
+
+- `metrics.csv`：复用 `pythonsimulation.metrics` 计算的指标。
+- `trajectory_3d.png`、`trajectory_xy.png`、`trajectory_xz.png`、`distance_error.png`、`fov_visibility.png`、`acceleration.png`、`yaw_rate.png`、`metrics.png`：复用 `pythonsimulation.plotting` 生成的图。
+
+后处理脚本也支持显式参数，例如：
+
+```bash
+uv run python plot_gazebo_csv.py outputs/my_gazebo_run/circle/pn_fov_nmpc/gazebo_samples.csv \
+  --scenario circle \
+  --algorithm pn_fov_nmpc \
+  --output-dir outputs/my_gazebo_run_plots
+```
+
+ROS 节点常用记录参数：
+
+- `record_data:=false`：关闭 ROS 节点 CSV 记录。
+- `record_output_dir:=outputs/my_gazebo_run`：修改 CSV 输出根目录，实际结果仍按 `<scenario>/<algorithm>` 分目录。
 
 ### 话题
 

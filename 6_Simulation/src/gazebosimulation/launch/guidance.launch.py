@@ -43,6 +43,10 @@ def generate_launch_description() -> LaunchDescription:
         # MAVLink system id 必须匹配接收 VehicleCommand 的两个 PX4 实例。
         DeclareLaunchArgument("pursuer_system_id", default_value="1"),
         DeclareLaunchArgument("target_system_id", default_value="2"),
+
+        # 记录 Gazebo/PX4 话题数据；节点只保存 CSV，图片由普通 Python 脚本后处理。
+        DeclareLaunchArgument("record_data", default_value="true"),
+        DeclareLaunchArgument("record_output_dir", default_value="outputs/gazebo"),
     ]
 
     node = Node(
@@ -67,6 +71,8 @@ def generate_launch_description() -> LaunchDescription:
                 "dt": LaunchConfiguration("dt"),
                 "pursuer_system_id": LaunchConfiguration("pursuer_system_id"),
                 "target_system_id": LaunchConfiguration("target_system_id"),
+                "record_data": LaunchConfiguration("record_data"),
+                "record_output_dir": LaunchConfiguration("record_output_dir"),
             },
         ],
     )
