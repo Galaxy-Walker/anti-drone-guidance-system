@@ -260,6 +260,25 @@ uv run python main.py --scenario circle --export-mcap
 - 默认算法是 `pn_fov_mppi`。
 - 默认场景是 `circle`。
 
+PX4 SITL 按下面方式启动时，`PX4_UXRCE_DDS_NS=px4_1` 对应追踪机，`PX4_UXRCE_DDS_NS=px4_2` 对应目标机：
+
+```bash
+PX4_SYS_AUTOSTART=4001 \
+PX4_SIM_MODEL=gz_x500 \
+PX4_GZ_MODEL_POSE="0,0,0,0,0,0" \
+PX4_UXRCE_DDS_NS=px4_1 \
+./build/px4_sitl_default/bin/px4 -i 0
+```
+
+```bash
+PX4_GZ_STANDALONE=1 \
+PX4_SYS_AUTOSTART=4001 \
+PX4_SIM_MODEL=gz_x500 \
+PX4_GZ_MODEL_POSE="0,5,0,0,0,0" \
+PX4_UXRCE_DDS_NS=px4_2 \
+./build/px4_sitl_default/bin/px4 -i 1
+```
+
 构建并启动：
 
 ```bash
@@ -278,10 +297,15 @@ ros2 launch gazebosimulation guidance.launch.py \
   control_rate_hz:=20.0 \
   pursuer_namespace:=/px4_1 \
   target_namespace:=/px4_2 \
+  target_teleport_enabled:=true \
+  target_gazebo_world:=default \
+  target_gazebo_model:=x500_1 \
   auto_arm:=true \
   auto_offboard:=true \
   offboard_warmup_cycles:=20
 ```
+
+默认会在导引开始前调用 Gazebo Sim 的 `/world/<world>/set_pose`，把目标机模型瞬移到目标轨迹 `t=0` 位置。上面的 `PX4_GZ_MODEL_POSE="0,5,0,0,0,0"` 只作为 Gazebo 生成目标机的临时初始位姿；如果第二架机模型名不是 `x500_1`，用 `target_gazebo_model:=<实际模型名>` 覆盖。
 
 订阅话题：
 

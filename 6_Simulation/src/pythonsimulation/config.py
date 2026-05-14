@@ -8,7 +8,7 @@ import numpy as np
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # 这样新增算法/场景时不容易出现“命令行能选，但仿真循环没跑”的不一致。
 SCENARIOS = ("stationary", "linear", "circle")
-ALGORITHMS = ("basic", "pn", "pn_fov", "pn_fov_cbf", "pn_fov_nmpc", "pn_fov_mppi")
+ALGORITHMS = ("basic", "pn", "pn_fov", "pn_fov_cbf", "pn_fov_mppi", "pn_fov_nmpc")
 
 # 内部算法名适合写代码，图表标签适合给人看；分开保存可以避免到处写重复字符串。
 ALGORITHM_LABELS = {
@@ -16,8 +16,8 @@ ALGORITHM_LABELS = {
     "pn": "3D PN",
     "pn_fov": "PN + FOV",
     "pn_fov_cbf": "PN + FOV + CBF",
-    "pn_fov_nmpc": "PN + FOV + NMPC",
     "pn_fov_mppi": "PN + FOV + MPPI",
+    "pn_fov_nmpc": "PN + FOV + NMPC",
 }
 
 

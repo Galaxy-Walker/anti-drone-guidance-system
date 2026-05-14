@@ -23,6 +23,10 @@ guidance_node:
     sim_time: 40.0
     dt: 0.05
 
+    # 目标机先飞到场景 t=0 起点并停稳，再允许追踪机解锁和开始记录。
+    target_start_position_tolerance: 0.75
+    target_start_velocity_tolerance: 0.75
+
     # 追踪机和目标机 PX4 实例的 MAVLink system id。
     pursuer_system_id: 1
     target_system_id: 2

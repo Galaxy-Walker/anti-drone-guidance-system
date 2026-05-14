@@ -18,6 +18,29 @@ CORE_METRICS = (
 )
 
 
+ALGORITHM_GRID = (2, 3)
+
+
+def _algorithm_color(index: int) -> str | None:
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
+    return colors[index % len(colors)] if colors else None
+
+
+def _hide_unused_axes(axes: np.ndarray, used_count: int) -> None:
+    for ax in axes.ravel()[used_count:]:
+        ax.set_visible(False)
+
+
+def _set_algorithm_grid_labels(axes: np.ndarray, used_count: int, x_label: str, y_label: str) -> None:
+    rows, columns = axes.shape
+    for index, ax in enumerate(axes.ravel()[:used_count]):
+        row, column = divmod(index, columns)
+        if row == rows - 1 or index + columns >= used_count:
+            ax.set_xlabel(x_label)
+        if column == 0:
+            ax.set_ylabel(y_label)
+
+
 def plot_scenario(
     scenario: str,
     results: dict[str, SimulationResult],
@@ -50,9 +73,11 @@ def _plot_trajectory_3d(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig = plt.figure(figsize=(10, 7))
+    fig = plt.figure(figsize=(15, 9))
     try:
-        ax = fig.add_subplot(111, projection="3d")
+        axes = np.array(
+            [fig.add_subplot(*ALGORITHM_GRID, index + 1, projection="3d") for index in range(np.prod(ALGORITHM_GRID))]
+        ).reshape(ALGORITHM_GRID)
     except ValueError as exc:
         plt.close(fig)
         (output_dir / "trajectory_3d_skipped.txt").write_text(
@@ -62,21 +87,37 @@ def _plot_trajectory_3d(
         return
     # 目标轨迹对所有算法相同，所以拿第一个 result 中的 target_position 画一次即可。
     first = next(iter(results.values()))
-    ax.plot(first.target_position[:, 0], first.target_position[:, 1], first.target_position[:, 2], "k--", label="Target")
-    for algorithm, result in results.items():
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         label = ALGORITHM_LABELS[algorithm]
-        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 1], result.pursuer_position[:, 2], label=label)
+        color = _algorithm_color(index)
+        ax.plot(first.target_position[:, 0], first.target_position[:, 1], first.target_position[:, 2], "k--", label="Target")
+        ax.plot(
+            result.pursuer_position[:, 0],
+            result.pursuer_position[:, 1],
+            result.pursuer_position[:, 2],
+            color=color,
+            label="Pursuer",
+        )
         # 捕获点不是最后点，而是第一次进入 capture_radius 的点。
         captured = np.flatnonzero(result.distance <= config.capture_radius)
         if captured.size:
             point = result.pursuer_position[captured[0]]
-            ax.scatter(point[0], point[1], point[2], s=30)
-    ax.scatter(first.pursuer_position[0, 0], first.pursuer_position[0, 1], first.pursuer_position[0, 2], c="g", marker="o", label="Start")
-    ax.set_title(f"{scenario}: 3D trajectory")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("y [m]")
-    ax.set_zlabel("z [m]")
-    ax.legend()
+            ax.scatter(point[0], point[1], point[2], s=30, color=color, label="Capture")
+        ax.scatter(
+            result.pursuer_position[0, 0],
+            result.pursuer_position[0, 1],
+            result.pursuer_position[0, 2],
+            c="g",
+            marker="o",
+            label="Start",
+        )
+        ax.set_title(label)
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_zlabel("z [m]")
+        ax.legend(fontsize=7)
+    _hide_unused_axes(axes, len(results))
+    fig.suptitle(f"{scenario}: 3D trajectory")
     fig.tight_layout()
     fig.savefig(output_dir / "trajectory_3d.png", dpi=160)
 
@@ -87,23 +128,25 @@ def _plot_trajectory_xy(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(9, 7))
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8))
     first = next(iter(results.values()))
     # x-y 俯视图能更清楚观察水平面是否绕远、是否出现横向拦截。
-    ax.plot(first.target_position[:, 0], first.target_position[:, 1], "k--", label="Target")
-    for algorithm, result in results.items():
-        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 1], label=ALGORITHM_LABELS[algorithm])
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
+        color = _algorithm_color(index)
+        ax.plot(first.target_position[:, 0], first.target_position[:, 1], "k--", label="Target")
+        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 1], color=color, label="Pursuer")
         captured = np.flatnonzero(result.distance <= config.capture_radius)
         if captured.size:
             point = result.pursuer_position[captured[0]]
-            ax.scatter(point[0], point[1], s=25)
-    ax.set_title(f"{scenario}: x-y trajectory")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("y [m]")
-    # equal 保证 x/y 比例一致，否则圆形轨迹可能被拉伸成椭圆，误导判断。
-    ax.axis("equal")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+            ax.scatter(point[0], point[1], s=25, color=color, label="Capture")
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        # equal 保证 x/y 比例一致，否则圆形轨迹可能被拉伸成椭圆，误导判断。
+        ax.axis("equal")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "x [m]", "y [m]")
+    fig.suptitle(f"{scenario}: x-y trajectory")
     fig.tight_layout()
     fig.savefig(output_dir / "trajectory_xy.png", dpi=160)
 
@@ -114,19 +157,21 @@ def _plot_trajectory_xz(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8))
     first = next(iter(results.values()))
     # x-z 侧视图主要用来检查高度变化和是否触碰 z_min/z_max 约束。
-    ax.plot(first.target_position[:, 0], first.target_position[:, 2], "k--", label="Target")
-    for algorithm, result in results.items():
-        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 2], label=ALGORITHM_LABELS[algorithm])
-    ax.axhline(config.pursuer.z_min, color="0.7", linestyle=":", linewidth=1)
-    ax.axhline(config.pursuer.z_max, color="0.7", linestyle=":", linewidth=1)
-    ax.set_title(f"{scenario}: x-z trajectory")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("z [m]")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
+        color = _algorithm_color(index)
+        ax.plot(first.target_position[:, 0], first.target_position[:, 2], "k--", label="Target")
+        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 2], color=color, label="Pursuer")
+        ax.axhline(config.pursuer.z_min, color="0.7", linestyle=":", linewidth=1)
+        ax.axhline(config.pursuer.z_max, color="0.7", linestyle=":", linewidth=1)
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "x [m]", "z [m]")
+    fig.suptitle(f"{scenario}: x-z trajectory")
     fig.tight_layout()
     fig.savefig(output_dir / "trajectory_xz.png", dpi=160)
 
@@ -137,9 +182,10 @@ def _plot_distance_error(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for algorithm, result in results.items():
-        (line,) = ax.plot(result.time, result.distance, label=ALGORITHM_LABELS[algorithm])
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
+        color = _algorithm_color(index)
+        (line,) = ax.plot(result.time, result.distance, color=color)
         min_index = int(np.argmin(result.distance))
         min_time = result.time[min_index]
         min_distance = result.distance[min_index]
@@ -153,13 +199,13 @@ def _plot_distance_error(
             fontsize=8,
             color=color,
         )
-    # 距离曲线低于这条线时，就满足本项目定义的“捕获”。
-    ax.axhline(config.capture_radius, color="k", linestyle=":", linewidth=1, label="Capture radius")
-    ax.set_title(f"{scenario}: distance error")
-    ax.set_xlabel("time [s]")
-    ax.set_ylabel("range error [m]")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        # 距离曲线低于这条线时，就满足本项目定义的“捕获”。
+        ax.axhline(config.capture_radius, color="k", linestyle=":", linewidth=1)
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        ax.grid(True, alpha=0.3)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "time [s]", "range error [m]")
+    fig.suptitle(f"{scenario}: distance error")
     fig.tight_layout()
     fig.savefig(output_dir / "distance_error.png", dpi=160)
 
@@ -170,38 +216,45 @@ def _plot_fov_visibility(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, (angle_ax, visible_ax) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
     fov_deg = np.rad2deg(config.guidance.fov_half_angle)
-    for algorithm, result in results.items():
-        label = ALGORITHM_LABELS[algorithm]
-        # 上图画连续 LOS 夹角；下图画 0/1 可见性，便于定位何时丢失目标。
-        angle_ax.plot(result.time, np.rad2deg(result.los_angle), label=label)
-        visible_ax.step(result.time, result.visible.astype(float), where="post", label=label)
-    # LOS 角度超过半视场角时，FOV 算法就会认为目标离开画面。
-    angle_ax.axhline(fov_deg, color="k", linestyle=":", linewidth=1, label="FOV half angle")
-    angle_ax.set_title(f"{scenario}: LOS/FOV")
-    angle_ax.set_ylabel("LOS angle [deg]")
-    angle_ax.grid(True, alpha=0.3)
-    angle_ax.legend()
-    visible_ax.set_xlabel("time [s]")
-    visible_ax.set_ylabel("visible")
-    visible_ax.set_yticks([0.0, 1.0])
-    visible_ax.grid(True, alpha=0.3)
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
+        color = _algorithm_color(index)
+        visible_ax = ax.twinx()
+        # 每个算法单独一格；左轴画 LOS 夹角，右轴画 0/1 可见性。
+        ax.plot(result.time, np.rad2deg(result.los_angle), color=color, label="LOS angle")
+        visible_ax.step(result.time, result.visible.astype(float), where="post", color="0.35", alpha=0.7, label="Visible")
+        # LOS 角度超过半视场角时，FOV 算法就会认为目标离开画面。
+        ax.axhline(fov_deg, color="k", linestyle=":", linewidth=1, label="FOV half angle")
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        ax.grid(True, alpha=0.3)
+        visible_ax.set_ylim(-0.05, 1.05)
+        visible_ax.set_yticks([0.0, 1.0])
+        if index % axes.shape[1] != axes.shape[1] - 1:
+            visible_ax.set_yticklabels([])
+        else:
+            visible_ax.set_ylabel("visible")
+        lines, labels = ax.get_legend_handles_labels()
+        visible_lines, visible_labels = visible_ax.get_legend_handles_labels()
+        ax.legend(lines + visible_lines, labels + visible_labels, fontsize=7)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "time [s]", "LOS angle [deg]")
+    fig.suptitle(f"{scenario}: LOS/FOV")
     fig.tight_layout()
     fig.savefig(output_dir / "fov_visibility.png", dpi=160)
 
 
 def _plot_acceleration(scenario: str, results: dict[str, SimulationResult], output_dir: Path) -> None:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for algorithm, result in results.items():
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         # 为了图更易读，这里画三维加速度向量的模长，而不是分别画 ax/ay/az 三条线。
         acceleration_norm = np.linalg.norm(result.acceleration, axis=1)
-        ax.plot(result.time, acceleration_norm, label=ALGORITHM_LABELS[algorithm])
-    ax.set_title(f"{scenario}: acceleration command")
-    ax.set_xlabel("time [s]")
-    ax.set_ylabel("||a_cmd|| [m/s^2]")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        ax.plot(result.time, acceleration_norm, color=_algorithm_color(index))
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        ax.grid(True, alpha=0.3)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "time [s]", "||a_cmd|| [m/s^2]")
+    fig.suptitle(f"{scenario}: acceleration command")
     fig.tight_layout()
     fig.savefig(output_dir / "acceleration.png", dpi=160)
 
@@ -212,18 +265,18 @@ def _plot_yaw_rate(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for algorithm, result in results.items():
+    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         yaw_rate = yaw_rate_command(result.yaw, config.dt)
         if not yaw_rate.size:
             continue
-        ax.plot(result.time[1:], yaw_rate, label=ALGORITHM_LABELS[algorithm])
-    ax.axhline(0.0, color="k", linestyle=":", linewidth=1)
-    ax.set_title(f"{scenario}: yaw-rate command")
-    ax.set_xlabel("time [s]")
-    ax.set_ylabel("yaw rate [rad/s]")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        ax.plot(result.time[1:], yaw_rate, color=_algorithm_color(index))
+        ax.axhline(0.0, color="k", linestyle=":", linewidth=1)
+        ax.set_title(ALGORITHM_LABELS[algorithm])
+        ax.grid(True, alpha=0.3)
+    _hide_unused_axes(axes, len(results))
+    _set_algorithm_grid_labels(axes, len(results), "time [s]", "yaw rate [rad/s]")
+    fig.suptitle(f"{scenario}: yaw-rate command")
     fig.tight_layout()
     fig.savefig(output_dir / "yaw_rate.png", dpi=160)
 

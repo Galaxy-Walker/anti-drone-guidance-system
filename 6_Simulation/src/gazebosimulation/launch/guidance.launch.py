@@ -39,6 +39,8 @@ def generate_launch_description() -> LaunchDescription:
         # 相同的时间假设。
         DeclareLaunchArgument("sim_time", default_value="40.0"),
         DeclareLaunchArgument("dt", default_value="0.05"),
+        DeclareLaunchArgument("target_start_position_tolerance", default_value="0.75"),
+        DeclareLaunchArgument("target_start_velocity_tolerance", default_value="0.75"),
 
         # MAVLink system id 必须匹配接收 VehicleCommand 的两个 PX4 实例。
         DeclareLaunchArgument("pursuer_system_id", default_value="1"),
@@ -69,6 +71,8 @@ def generate_launch_description() -> LaunchDescription:
                 "offboard_warmup_cycles": LaunchConfiguration("offboard_warmup_cycles"),
                 "sim_time": LaunchConfiguration("sim_time"),
                 "dt": LaunchConfiguration("dt"),
+                "target_start_position_tolerance": LaunchConfiguration("target_start_position_tolerance"),
+                "target_start_velocity_tolerance": LaunchConfiguration("target_start_velocity_tolerance"),
                 "pursuer_system_id": LaunchConfiguration("pursuer_system_id"),
                 "target_system_id": LaunchConfiguration("target_system_id"),
                 "record_data": LaunchConfiguration("record_data"),

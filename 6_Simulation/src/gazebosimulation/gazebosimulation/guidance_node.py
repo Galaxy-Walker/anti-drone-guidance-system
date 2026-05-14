@@ -91,15 +91,20 @@ class GuidanceNode(Node):
         self._pursuer: PursuerState | None = None
         self._target: TargetState | None = None
 
-        # 目标轨迹时钟从两路里程计都可用后才开始，避免 Gazebo/PX4 启动期间目标参考
-        # 已经提前向前推进。
+        # 目标轨迹时钟从目标机就位且追踪机准备完成后才开始，避免启动/对齐阶段被计入追踪。
         self._active_start_ns: int | None = None
 
         # PX4 在接受 Offboard 模式切换前，需要先收到若干 OffboardControlMode 和
-        # TrajectorySetpoint 消息。这些标志确保预热结束后 arm/offboard 命令只发送一次。
-        self._offboard_cycles = 0
-        self._arm_sent = False
-        self._offboard_sent = False
+        # TrajectorySetpoint 消息。目标机和追踪机分阶段预热/解锁，避免追踪机在目标机
+        # 尚未到达场景起点前就开始追踪和记录。
+        self._target_offboard_cycles = 0
+        self._pursuer_offboard_cycles = 0
+        self._target_arm_sent = False
+        self._target_offboard_sent = False
+        self._pursuer_arm_sent = False
+        self._pursuer_offboard_sent = False
+        self._target_ready = False
+        self._pursuer_ready = False
 
         # 当目标参考速度接近 0 时复用上一帧 yaw，避免静止目标因为 atan2 数值噪声乱转。
         self._target_yaw_enu = 0.0
@@ -204,6 +209,10 @@ class GuidanceNode(Node):
         self.declare_parameter("sim_time", 40.0)
         self.declare_parameter("dt", 0.05)
 
+        # 目标机先飞到场景 t=0 的正确起点，进入该容差后才允许追踪机开始准备。
+        self.declare_parameter("target_start_position_tolerance", 0.75)
+        self.declare_parameter("target_start_velocity_tolerance", 0.75)
+
         # VehicleCommand 的目标 system id 必须匹配两个 PX4 实例。
         self.declare_parameter("pursuer_system_id", 1)
         self.declare_parameter("target_system_id", 2)
@@ -234,6 +243,12 @@ class GuidanceNode(Node):
         self._auto_arm = _as_bool(self.get_parameter("auto_arm").value)
         self._auto_offboard = _as_bool(self.get_parameter("auto_offboard").value)
         self._offboard_warmup_cycles = int(self.get_parameter("offboard_warmup_cycles").value)
+        self._target_start_position_tolerance = float(
+            self.get_parameter("target_start_position_tolerance").value
+        )
+        self._target_start_velocity_tolerance = float(
+            self.get_parameter("target_start_velocity_tolerance").value
+        )
         self._pursuer_system_id = int(self.get_parameter("pursuer_system_id").value)
         self._target_system_id = int(self.get_parameter("target_system_id").value)
         self._record_data = _as_bool(self.get_parameter("record_data").value)
@@ -274,6 +289,16 @@ class GuidanceNode(Node):
             return
 
         now_us = timestamp_us(self)
+        target_start = self._target_start_reference()
+
+        if not self._target_ready:
+            self._prepare_target_at_start(now_us, target_start)
+            return
+
+        if not self._pursuer_ready:
+            self._prepare_pursuer_for_tracking(now_us, target_start)
+            return
+
         elapsed = self._elapsed_seconds()
 
         # 目标机跟随理想场景参考；追踪机则使用下面的 PX4 目标里程计，因此目标跟踪误差会进入闭环行为。
@@ -294,7 +319,31 @@ class GuidanceNode(Node):
 
         self._publish_target_setpoint(now_us, target_reference)
         self._publish_pursuer_setpoint(now_us, applied_acceleration, guidance.look_at_position)
-        self._publish_mode_commands(now_us)
+
+    def _target_start_reference(self) -> TargetState:
+        """返回目标机应先到达并悬停的场景初始点。"""
+        start = target_state(self._scenario, 0.0, self._config)
+        return TargetState(start.position.copy(), np.zeros(3), np.zeros(3))
+
+    def _prepare_target_at_start(self, timestamp: int, target_start: TargetState) -> None:
+        """仅控制目标机：解锁/Offboard 后飞到场景 t=0 起点。"""
+        self._publish_target_setpoint(timestamp, target_start)
+        self._publish_target_mode_commands(timestamp)
+
+        if self._target_commands_done() and self._target_at_start(target_start.position):
+            self._target_ready = True
+            self.get_logger().info("target reached scenario start; preparing pursuer")
+
+    def _prepare_pursuer_for_tracking(self, timestamp: int, target_start: TargetState) -> None:
+        """目标机保持起点，追踪机完成解锁/Offboard 预热。"""
+        self._publish_target_setpoint(timestamp, target_start)
+        self._publish_pursuer_hold_setpoint(timestamp, target_start.position)
+        self._publish_pursuer_mode_commands(timestamp)
+
+        if self._pursuer_commands_done():
+            self._pursuer_ready = True
+            self._active_start_ns = None
+            self.get_logger().info("pursuer ready; starting tracking and data recording")
 
     def _record_sample(
         self,
@@ -478,6 +527,19 @@ class GuidanceNode(Node):
             )
         )
 
+    def _publish_pursuer_hold_setpoint(self, timestamp: int, look_at_position_enu: np.ndarray) -> None:
+        """追踪机准备阶段只保持当前位置，不提前执行导引。"""
+        yaw_ned = yaw_to_target_ned(self._pursuer.position, look_at_position_enu)
+        self._pursuer_offboard_pub.publish(offboard_control_mode(timestamp, position=True, velocity=True, acceleration=False))
+        self._pursuer_setpoint_pub.publish(
+            trajectory_setpoint(
+                timestamp,
+                position=enu_to_ned_list(self._pursuer.position),
+                velocity=enu_to_ned_list(np.zeros(3)),
+                yaw=yaw_ned,
+            )
+        )
+
     def _limit_vertical_velocity(self, position_enu: np.ndarray, velocity_enu: np.ndarray) -> np.ndarray:
         """防止简单 setpoint 积分命令 z 超出高度边界。"""
         limited = velocity_enu.copy()
@@ -490,25 +552,56 @@ class GuidanceNode(Node):
             limited[2] = min(0.0, (self._config.pursuer.z_max - position_enu[2]) / self._config.dt)
         return limited
 
-    def _publish_mode_commands(self, timestamp: int) -> None:
-        """PX4 收到预热 setpoint 后，一次性发送 arm/offboard 命令。"""
-        self._offboard_cycles += 1
-        if self._offboard_cycles < self._offboard_warmup_cycles:
-            # 如果 PX4 尚未持续收到有效 OffboardControlMode/TrajectorySetpoint 消息，
-            # 它会拒绝切入 Offboard 模式。
+    def _target_at_start(self, start_position_enu: np.ndarray) -> bool:
+        """判断目标机是否已到达并基本停稳在场景起点。"""
+        position_error = float(np.linalg.norm(self._target.position - start_position_enu))
+        speed = float(np.linalg.norm(self._target.velocity))
+        return (
+            position_error <= self._target_start_position_tolerance
+            and speed <= self._target_start_velocity_tolerance
+        )
+
+    def _target_commands_done(self) -> bool:
+        return (not self._auto_arm or self._target_arm_sent) and (
+            not self._auto_offboard or self._target_offboard_sent
+        )
+
+    def _pursuer_commands_done(self) -> bool:
+        return (not self._auto_arm or self._pursuer_arm_sent) and (
+            not self._auto_offboard or self._pursuer_offboard_sent
+        )
+
+    def _publish_target_mode_commands(self, timestamp: int) -> None:
+        """目标机收到预热 setpoint 后，先单独 arm/offboard。"""
+        self._target_offboard_cycles += 1
+        if self._target_offboard_cycles < self._offboard_warmup_cycles:
             return
 
-        if self._auto_arm and not self._arm_sent:
-            self._pursuer_command_pub.publish(arm_command(timestamp, self._pursuer_system_id, arm=True))
+        if self._auto_arm and not self._target_arm_sent:
             self._target_command_pub.publish(arm_command(timestamp, self._target_system_id, arm=True))
-            self._arm_sent = True
-            self.get_logger().info("sent arm commands for pursuer and target")
+            self._target_arm_sent = True
+            self.get_logger().info("sent arm command for target")
 
-        if self._auto_offboard and not self._offboard_sent:
-            self._pursuer_command_pub.publish(offboard_mode_command(timestamp, self._pursuer_system_id))
+        if self._auto_offboard and not self._target_offboard_sent:
             self._target_command_pub.publish(offboard_mode_command(timestamp, self._target_system_id))
-            self._offboard_sent = True
-            self.get_logger().info("sent offboard mode commands for pursuer and target")
+            self._target_offboard_sent = True
+            self.get_logger().info("sent offboard mode command for target")
+
+    def _publish_pursuer_mode_commands(self, timestamp: int) -> None:
+        """目标机就位后，再单独预热并 arm/offboard 追踪机。"""
+        self._pursuer_offboard_cycles += 1
+        if self._pursuer_offboard_cycles < self._offboard_warmup_cycles:
+            return
+
+        if self._auto_arm and not self._pursuer_arm_sent:
+            self._pursuer_command_pub.publish(arm_command(timestamp, self._pursuer_system_id, arm=True))
+            self._pursuer_arm_sent = True
+            self.get_logger().info("sent arm command for pursuer")
+
+        if self._auto_offboard and not self._pursuer_offboard_sent:
+            self._pursuer_command_pub.publish(offboard_mode_command(timestamp, self._pursuer_system_id))
+            self._pursuer_offboard_sent = True
+            self.get_logger().info("sent offboard mode command for pursuer")
 
 
 def main(args: list[str] | None = None) -> None:

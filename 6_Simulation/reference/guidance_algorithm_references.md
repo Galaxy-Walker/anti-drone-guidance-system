@@ -12,8 +12,8 @@
 | `pn_guidance()` / `pn` | Proportional Navigation, PN | 经典拦截导引律、LOS 角速度、closing speed |
 | `pn_fov` | PN + 视场约束 + last-seen 常速度预测 | FOV-constrained guidance、视觉伺服、目标丢失后的短期预测 |
 | `fov_cbf_acceleration()` / `pn_fov_cbf` | PN 名义控制 + CBF 风格安全滤波 | 控制屏障函数、有限视场安全约束、视觉目标保持在 FOV 内 |
-| `nmpc_acceleration()` / `pn_fov_nmpc` | PN 趋势附近滚动预测 / 轻量 NMPC | UAV target tracking、visibility constraint、obstacle / control constraints |
 | `mppi_acceleration()` / `pn_fov_mppi` | PN 名义序列 + MPPI 随机采样加权 | sampling-based MPC、Model Predictive Path Integral、并行 rollout |
+| `nmpc_acceleration()` / `pn_fov_nmpc` | PN 趋势附近滚动预测 / 轻量 NMPC | UAV target tracking、visibility constraint、obstacle / control constraints |
 
 ## 优先阅读资料
 

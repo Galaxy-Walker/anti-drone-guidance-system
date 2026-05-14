@@ -67,8 +67,8 @@ uv run python main.py --scenario circle --export-mcap
 | `pn` | 3D PN | 使用相对位置、相对速度和 LOS 角速率生成三维 PN 加速度。 |
 | `pn_fov` | PN + FOV | 加入视场约束，目标离开视场后使用 last-seen 匀速预测。 |
 | `pn_fov_cbf` | PN + FOV + CBF | 在接近 FOV 边界时加入控制屏障函数风格的侧向安全修正。 |
-| `pn_fov_nmpc` | PN + FOV + NMPC | 在 PN 趋势附近枚举候选加速度，滚动预测后选择综合代价最低的控制。 |
 | `pn_fov_mppi` | PN + FOV + MPPI | 基于 PN 名义控制序列随机采样多条控制序列，用指数权重融合第一步控制。 |
+| `pn_fov_nmpc` | PN + FOV + NMPC | 在 PN 趋势附近枚举候选加速度，滚动预测后选择综合代价最低的控制。 |
 
 ### Direct pursuit
 
@@ -94,6 +94,14 @@ uv run python main.py --scenario circle --export-mcap
 
 当前实现是适配本项目质点模型的轻量近似，不引入二次规划求解器。它更像一个在线安全修正层：如果一步预测发现修正反而让 LOS/FOV 更差，就回退到原 PN + FOV 控制。
 
+### PN + FOV + MPPI
+
+在 PN + FOV 基础上加入 MPPI（Model Predictive Path Integral）采样式预测控制。它以 PN 加速度为名义控制序列，在预测窗口内随机采样多条加速度序列，批量前向仿真后根据代价的指数权重对第一步控制做加权平均。
+
+代价函数复用 NMPC 的目标：最终距离、窗口内路径距离、FOV 违反、控制能量、平滑性和偏离 PN 趋势。为了保持可复现性，MPPI 随机数由 `GuidanceConfig.mppi_seed` 固定；为了避免全场景仿真过慢，滚动预测使用 NumPy 批量计算。
+
+当前参数下，MPPI 通常能显著降低 FOV 丢失时间，同时保持较快捕获，但代价是计算量高于 PN/CBF。
+
 ### PN + FOV + NMPC
 
 在 PN + FOV 基础上加入轻量级预测外环。这里的 NMPC 不依赖 CasADi/acados 等重型求解器，而是使用 shooting-based candidate optimization：
@@ -105,14 +113,6 @@ uv run python main.py --scenario circle --export-mcap
 5. 选择代价最低的候选，只执行第一步，下一帧重新滚动优化。
 
 它的目标不是绝对最快捕获，而是在追踪目标的同时尽量减少 FOV 丢失。当前参数下，NMPC 往往更保守，可能牺牲一些捕获速度来换取更好的视场保持。
-
-### PN + FOV + MPPI
-
-在 PN + FOV 基础上加入 MPPI（Model Predictive Path Integral）采样式预测控制。它以 PN 加速度为名义控制序列，在预测窗口内随机采样多条加速度序列，批量前向仿真后根据代价的指数权重对第一步控制做加权平均。
-
-代价函数复用 NMPC 的目标：最终距离、窗口内路径距离、FOV 违反、控制能量、平滑性和偏离 PN 趋势。为了保持可复现性，MPPI 随机数由 `GuidanceConfig.mppi_seed` 固定；为了避免全场景仿真过慢，滚动预测使用 NumPy 批量计算。
-
-当前参数下，MPPI 通常能显著降低 FOV 丢失时间，同时保持较快捕获，但代价是计算量高于 PN/CBF。
 
 ## 输出目录
 
