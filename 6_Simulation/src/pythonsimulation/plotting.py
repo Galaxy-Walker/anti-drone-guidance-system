@@ -21,6 +21,20 @@ CORE_METRICS = (
 ALGORITHM_GRID = (2, 3)
 
 
+def _algorithm_plot_grid(results: dict[str, SimulationResult]) -> tuple[int, int]:
+    return (1, 1) if len(results) == 1 else ALGORITHM_GRID
+
+
+def _make_algorithm_axes(
+    results: dict[str, SimulationResult],
+    figsize: tuple[float, float],
+    *,
+    sharex: bool = False,
+) -> tuple[plt.Figure, np.ndarray]:
+    fig, axes = plt.subplots(*_algorithm_plot_grid(results), figsize=figsize, sharex=sharex, squeeze=False)
+    return fig, axes
+
+
 def _algorithm_color(index: int) -> str | None:
     colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
     return colors[index % len(colors)] if colors else None
@@ -74,10 +88,9 @@ def _plot_trajectory_3d(
     config: SimulationConfig,
 ) -> None:
     fig = plt.figure(figsize=(15, 9))
+    grid = _algorithm_plot_grid(results)
     try:
-        axes = np.array(
-            [fig.add_subplot(*ALGORITHM_GRID, index + 1, projection="3d") for index in range(np.prod(ALGORITHM_GRID))]
-        ).reshape(ALGORITHM_GRID)
+        axes = np.array([fig.add_subplot(*grid, index + 1, projection="3d") for index in range(np.prod(grid))]).reshape(grid)
     except ValueError as exc:
         plt.close(fig)
         (output_dir / "trajectory_3d_skipped.txt").write_text(
@@ -128,7 +141,7 @@ def _plot_trajectory_xy(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8))
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8))
     first = next(iter(results.values()))
     # x-y 俯视图能更清楚观察水平面是否绕远、是否出现横向拦截。
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
@@ -157,7 +170,7 @@ def _plot_trajectory_xz(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8))
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8))
     first = next(iter(results.values()))
     # x-z 侧视图主要用来检查高度变化和是否触碰 z_min/z_max 约束。
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
@@ -182,7 +195,7 @@ def _plot_distance_error(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         color = _algorithm_color(index)
         (line,) = ax.plot(result.time, result.distance, color=color)
@@ -216,7 +229,7 @@ def _plot_fov_visibility(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
     fov_deg = np.rad2deg(config.guidance.fov_half_angle)
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         color = _algorithm_color(index)
@@ -245,7 +258,7 @@ def _plot_fov_visibility(
 
 
 def _plot_acceleration(scenario: str, results: dict[str, SimulationResult], output_dir: Path) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         # 为了图更易读，这里画三维加速度向量的模长，而不是分别画 ax/ay/az 三条线。
         acceleration_norm = np.linalg.norm(result.acceleration, axis=1)
@@ -265,7 +278,7 @@ def _plot_yaw_rate(
     output_dir: Path,
     config: SimulationConfig,
 ) -> None:
-    fig, axes = plt.subplots(*ALGORITHM_GRID, figsize=(15, 8), sharex=True)
+    fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         yaw_rate = yaw_rate_command(result.yaw, config.dt)
         if not yaw_rate.size:
