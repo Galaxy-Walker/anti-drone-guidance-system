@@ -34,7 +34,7 @@ def constant_value(msg_type, name, fallback):
 
 
 class OffboardTestNode(Node):
-    """Small PX4 offboard test node using only px4_msgs 1.14.x common fields."""
+    """Small PX4 offboard/arm test node using PX4 uORB bridge topics."""
 
     def __init__(self):
         super().__init__('offboard_test_node')
@@ -51,16 +51,8 @@ class OffboardTestNode(Node):
             'vehicle_command_topic', '/fmu/in/vehicle_command').value
 
         self.control_rate_hz = float(self.declare_parameter('control_rate_hz', 10.0).value)
-        self.takeoff_height_m = abs(float(self.declare_parameter('takeoff_height_m', 2.0).value))
-        self.hold_time_sec = float(self.declare_parameter('hold_time_sec', 10.0).value)
         self.command_retry_interval_sec = float(
             self.declare_parameter('command_retry_interval_sec', 1.0).value)
-        self.require_local_position_valid = bool(
-            self.declare_parameter('require_local_position_valid', True).value)
-        self.auto_arm = bool(self.declare_parameter('auto_arm', False).value)
-        self.auto_land = bool(self.declare_parameter('auto_land', True).value)
-        self.stop_after_land_command = bool(
-            self.declare_parameter('stop_after_land_command', True).value)
 
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -93,8 +85,7 @@ class OffboardTestNode(Node):
         self.vehicle_status = VehicleStatus()
         self.local_position_received = False
         self.vehicle_status_received = False
-        self.first_setpoint_position = None
-        self.target_z = None
+        self.hold_position = None
         self.timer_ticks = 0
         self.last_local_position_time = None
         self.last_vehicle_status_time = None
@@ -102,7 +93,6 @@ class OffboardTestNode(Node):
         self.last_arm_request_time = None
         self.offboard_active_since = None
         self.armed_since = None
-        self.land_sent = False
         self.last_nav_state = None
         self.last_arming_state = None
         self.last_failsafe = None
@@ -122,9 +112,8 @@ class OffboardTestNode(Node):
         self.get_logger().info('PX4 offboard test node started')
         self.get_logger().info('=' * 70)
         self.get_logger().info(
-            'Using only px4_msgs 1.14.x common message types: '
-            'OffboardControlMode, TrajectorySetpoint, VehicleCommand, '
-            'VehicleLocalPosition, VehicleStatus.'
+            'Using PX4 topics: OffboardControlMode, TrajectorySetpoint, '
+            'VehicleCommand, VehicleLocalPosition, VehicleStatus.'
         )
         self.get_logger().info(
             'Publish topics: '
@@ -137,28 +126,19 @@ class OffboardTestNode(Node):
         )
         self.get_logger().info(
             f'Control rate: {1.0 / timer_period:.1f} Hz; '
-            f'takeoff_height_m={self.takeoff_height_m:.1f}; '
-            f'hold_time_sec={self.hold_time_sec:.1f}; '
             f'command_retry_interval_sec={self.command_retry_interval_sec:.1f}'
         )
         self.get_logger().info(
-            f'auto_arm={self.auto_arm}; auto_land={self.auto_land}; '
-            f'require_local_position_valid={self.require_local_position_valid}'
+            'Behavior: publish offboard heartbeat/setpoint, request OFFBOARD, '
+            'then request ARM. No takeoff, landing, or mission logic is included.'
         )
-        if not self.auto_arm:
-            self.get_logger().warn(
-                'auto_arm is false: this node will request OFFBOARD and hold the '
-                'setpoint, but it will not arm motors. Run with -p auto_arm:=true '
-                'only when the vehicle is secured and ready.'
-            )
 
     def vehicle_local_position_callback(self, msg):
         self.vehicle_local_position = msg
         self.last_local_position_time = self.get_clock().now()
         if not self.local_position_received:
             self.local_position_received = True
-            self.first_setpoint_position = [float(msg.x), float(msg.y), float(msg.z)]
-            self.target_z = float(msg.z) - self.takeoff_height_m
+            self.hold_position = [float(msg.x), float(msg.y), float(msg.z)]
             self.get_logger().info(
                 'First vehicle_local_position received: '
                 f'position=[{fmt_float(msg.x)}, {fmt_float(msg.y)}, {fmt_float(msg.z)}], '
@@ -169,9 +149,10 @@ class OffboardTestNode(Node):
                 f'z_valid={getattr(msg, "z_valid", "n/a")}'
             )
             self.get_logger().info(
-                'Initial hold XY locked at current local position; '
-                f'target_z={fmt_float(self.target_z)} NED '
-                f'({self.takeoff_height_m:.1f} m above current position).'
+                'Initial hold setpoint locked at current local position: '
+                f'[{fmt_float(self.hold_position[0])}, '
+                f'{fmt_float(self.hold_position[1])}, '
+                f'{fmt_float(self.hold_position[2])}] NED.'
             )
 
     def vehicle_status_callback(self, msg):
@@ -226,16 +207,6 @@ class OffboardTestNode(Node):
         age_ns = self.get_clock().now().nanoseconds - last_request_time.nanoseconds
         return age_ns >= self.command_retry_interval_sec * 1_000_000_000
 
-    def local_position_valid(self):
-        if not self.require_local_position_valid:
-            return True
-        if not self.local_position_received:
-            return False
-
-        xy_valid = getattr(self.vehicle_local_position, 'xy_valid', True)
-        z_valid = getattr(self.vehicle_local_position, 'z_valid', True)
-        return bool(xy_valid) and bool(z_valid)
-
     def is_offboard(self):
         return getattr(self.vehicle_status, 'nav_state', None) == self.offboard_nav_state
 
@@ -253,15 +224,10 @@ class OffboardTestNode(Node):
         self.offboard_control_mode_pub.publish(msg)
 
     def publish_position_setpoint(self):
+        if self.hold_position is None:
+            return
         msg = TrajectorySetpoint()
-        if self.first_setpoint_position is None:
-            msg.position = [0.0, 0.0, -self.takeoff_height_m]
-        else:
-            msg.position = [
-                self.first_setpoint_position[0],
-                self.first_setpoint_position[1],
-                self.target_z,
-            ]
+        msg.position = list(self.hold_position)
         msg.velocity = [math.nan, math.nan, math.nan]
         msg.acceleration = [math.nan, math.nan, math.nan]
         msg.jerk = [math.nan, math.nan, math.nan]
@@ -314,16 +280,10 @@ class OffboardTestNode(Node):
             'ARM request sent: VEHICLE_CMD_COMPONENT_ARM_DISARM param1=1.0'
         )
 
-    def request_land(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
-        self.get_logger().info('LAND request sent: VEHICLE_CMD_NAV_LAND')
-
     def log_snapshot(self):
         local = self.vehicle_local_position
         status = self.vehicle_status
-        target = self.first_setpoint_position or [0.0, 0.0, -self.takeoff_height_m]
-        if self.target_z is not None:
-            target = [target[0], target[1], self.target_z]
+        target = self.hold_position or [math.nan, math.nan, math.nan]
         nav_state = getattr(status, 'nav_state', None)
         arming_state = getattr(status, 'arming_state', None)
         self.get_logger().info(
@@ -341,7 +301,8 @@ class OffboardTestNode(Node):
             f'valid=[xy:{getattr(local, "xy_valid", "n/a")}, '
             f'z:{getattr(local, "z_valid", "n/a")}], '
             f'setpoint=[{fmt_float(target[0])}, {fmt_float(target[1])}, '
-            f'{fmt_float(target[2])}], auto_arm={self.auto_arm}'
+            f'{fmt_float(target[2])}], '
+            f'offboard_active={self.is_offboard()}, armed={self.is_armed()}'
         )
 
     def timer_callback(self):
@@ -361,16 +322,6 @@ class OffboardTestNode(Node):
                 )
             return
 
-        if not self.local_position_valid():
-            if self.timer_ticks % max(int(self.control_rate_hz), 1) == 0:
-                self.get_logger().warn(
-                    'Waiting for valid local position estimate: '
-                    f'xy_valid={getattr(self.vehicle_local_position, "xy_valid", "n/a")}, '
-                    f'z_valid={getattr(self.vehicle_local_position, "z_valid", "n/a")}. '
-                    'Set require_local_position_valid:=false only for controlled bench tests.'
-                )
-            return
-
         if not self.is_offboard():
             if self.retry_interval_elapsed(self.last_offboard_request_time):
                 self.get_logger().info('Vehicle is not in OFFBOARD; requesting OFFBOARD mode.')
@@ -382,9 +333,6 @@ class OffboardTestNode(Node):
             self.offboard_active_since = self.get_clock().now()
             self.get_logger().info('OFFBOARD mode is active.')
 
-        if not self.auto_arm:
-            return
-
         if not self.is_armed():
             if self.retry_interval_elapsed(self.last_arm_request_time):
                 self.get_logger().info('Vehicle is in OFFBOARD but not armed; sending ARM request.')
@@ -394,20 +342,7 @@ class OffboardTestNode(Node):
 
         if self.armed_since is None:
             self.armed_since = self.get_clock().now()
-            self.get_logger().info(
-                f'Vehicle is armed. Holding setpoint for {self.hold_time_sec:.1f} seconds.'
-            )
-
-        hold_elapsed_ns = self.get_clock().now().nanoseconds - self.armed_since.nanoseconds
-        if hold_elapsed_ns < self.hold_time_sec * 1_000_000_000:
-            return
-
-        if self.auto_land and not self.land_sent:
-            self.land_sent = True
-            self.request_land()
-            if self.stop_after_land_command:
-                self.get_logger().info('Land command sent; shutting down offboard_test_node.')
-                rclpy.shutdown()
+            self.get_logger().info('Vehicle is armed. Continuing offboard heartbeat/setpoint.')
 
 
 def main(args=None):
