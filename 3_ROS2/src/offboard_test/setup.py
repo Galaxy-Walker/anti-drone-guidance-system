@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'offboard_test_node = offboard_test.offboard_test_node:main',
+            'offboard_takeoff_node = offboard_test.offboard_takeoff_node:main',
         ],
     },
 )
