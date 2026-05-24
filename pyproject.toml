@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "foxglove-sdk>=0.24.0",
     "matplotlib>=3.10.8",
     "numpy>=2.4.2",
 ]

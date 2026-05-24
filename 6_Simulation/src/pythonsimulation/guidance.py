@@ -360,13 +360,6 @@ def _candidate_accelerations(
     intercept_velocity = config.guidance.pn_v_des_along_los * r_unit
     intercept = (intercept_velocity - pursuer.velocity) / max(config.guidance.direct_tau, EPS)
     velocity_match = (target.velocity - pursuer.velocity) / max(config.guidance.direct_tau, EPS)
-    horizon_time = max(config.guidance.horizon_steps * config.guidance.mpc_dt, EPS)
-    terminal_position = target.position + target.velocity * horizon_time
-    terminal_position_homing = (
-        2.0 * (terminal_position - pursuer.position - pursuer.velocity * horizon_time) / horizon_time**2
-    )
-    terminal_velocity_homing = (target.velocity - pursuer.velocity) / horizon_time
-    terminal_homing = 0.75 * terminal_position_homing + 0.25 * terminal_velocity_homing
 
     # 构造两个与 LOS 垂直的方向，用来测试“向左/右/上/下稍微绕一下”是否更保视场。
     lateral = normalize(np.cross(r_unit, np.array([0.0, 0.0, 1.0])))
@@ -383,10 +376,6 @@ def _candidate_accelerations(
         # 混入“拦截”分量：让候选更偏向直接接近目标，帮助减小最终距离。
         0.75 * pn_trend + 0.25 * intercept,
         0.5 * pn_trend + 0.5 * intercept,
-        # 末端贴近候选：按预测窗口末端反算控制，让 NMPC 能选到更小终端误差。
-        terminal_position_homing,
-        terminal_homing,
-        0.5 * pn_trend + 0.5 * terminal_homing,
         # “速度匹配”：接近目标后尝试匹配目标速度，减少飞过目标导致的视场丢失。
         velocity_match,
         0.5 * pn_trend + 0.5 * velocity_match,
@@ -448,12 +437,9 @@ def _rollout_cost(
 
     final_position = target.position + target.velocity * guidance.horizon_steps * guidance.mpc_dt
     final_distance = norm(final_position - state.position)
-    final_velocity_error = norm(target.velocity - state.velocity)
-    # 终端阶段对距离误差使用平方惩罚，并轻微约束相对速度，避免 NMPC 为了平滑/FOV 停在目标附近。
-    terminal_cost = final_distance**2 + config.capture_radius * final_velocity_error
     # 权重决定 NMPC 更偏向“快速接近”还是“保持视场/控制平滑”。
     return (
-        guidance.nmpc_w_dist * terminal_cost
+        guidance.nmpc_w_dist * final_distance
         + guidance.nmpc_w_path * path_cost
         + guidance.nmpc_w_fov * fov_cost
         + guidance.nmpc_w_control * control_cost
