@@ -81,10 +81,6 @@ class GuidanceConfig:
     nmpc_w_smooth: float = 0.08
     # 偏离 PN 趋势的惩罚让 NMPC 不至于选出完全背离 PN 导引方向的奇怪候选。
     nmpc_w_pn: float = 0.04
-    # 进入该距离后，NMPC 从“选择拦截候选”切到“捕获保持”，持续压低末端距离。
-    nmpc_capture_switch_radius: float = 3.0
-    # 近距阶段在目标速度上叠加位置闭环，避免 NMPC 只速度匹配而稳定在目标外侧。
-    nmpc_capture_position_gain: float = 1.6
     # CBF filter 在接近 FOV 边界前就开始侧向修正，避免等目标出视场后再搜索。
     cbf_fov_margin_deg: float = 8.0
     cbf_gain: float = 0.75

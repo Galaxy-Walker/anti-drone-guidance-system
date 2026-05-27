@@ -139,9 +139,6 @@ def nmpc_acceleration(
     memory: GuidanceMemory,
     config: SimulationConfig,
 ) -> np.ndarray:
-    if norm(target_reference.position - pursuer.position) <= config.guidance.nmpc_capture_switch_radius:
-        return _capture_tracking_acceleration(pursuer, target_reference, config)
-
     # 轻量 NMPC：不调用优化器，而是枚举一组候选加速度，前向滚动仿真后选最低代价。
     candidates = _candidate_accelerations(pursuer, target_reference, pn_trend, config)
     best_cost = float("inf")
@@ -156,18 +153,6 @@ def nmpc_acceleration(
             best_acceleration = acceleration
 
     return best_acceleration
-
-
-def _capture_tracking_acceleration(
-    pursuer: PursuerState,
-    target: TargetState,
-    config: SimulationConfig,
-) -> np.ndarray:
-    guidance = config.guidance
-    relative_position = target.position - pursuer.position
-    desired_velocity = target.velocity + guidance.nmpc_capture_position_gain * relative_position
-    acceleration = (desired_velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
-    return clamp_norm(acceleration, config.pursuer.a_max)
 
 
 def fov_cbf_acceleration(
@@ -373,11 +358,13 @@ def _candidate_accelerations(
     a_max = config.pursuer.a_max
     relative_position = target.position - pursuer.position
     r_unit = normalize(relative_position)
-    # “拦截”候选偏向快速接近目标；“速度匹配”候选偏向捕获后跟随目标运动。
+    # “拦截”候选偏向快速接近目标；“同速”候选用目标速度大小接近目标；
+    # “速度匹配”候选偏向捕获后跟随目标运动。
     intercept_velocity = guidance.pn_v_des_along_los * r_unit
     intercept = (intercept_velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
+    same_speed_velocity = norm(target.velocity) * r_unit
+    same_speed = (same_speed_velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
     velocity_match = (target.velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
-    capture_tracking = _capture_tracking_acceleration(pursuer, target, config)
 
     # 构造两个与 LOS 垂直的方向，用来测试“向左/右/上/下稍微绕一下”是否更保视场。
     lateral = normalize(np.cross(r_unit, np.array([0.0, 0.0, 1.0])))
@@ -394,12 +381,12 @@ def _candidate_accelerations(
         # 混入“拦截”分量：让候选更偏向直接接近目标，帮助减小最终距离。
         0.75 * pn_trend + 0.25 * intercept,
         0.5 * pn_trend + 0.5 * intercept,
+        # “同速接近”：保持朝向目标，但速度大小改为与目标相同，降低近距离飞越风险。
+        same_speed,
+        0.5 * pn_trend + 0.5 * same_speed,
         # “速度匹配”：接近目标后尝试匹配目标速度，减少飞过目标导致的视场丢失。
         velocity_match,
         0.5 * pn_trend + 0.5 * velocity_match,
-        # 近距跟踪：速度匹配外再消除位置误差，避免在目标外侧形成稳定间隔。
-        capture_tracking,
-        0.5 * pn_trend + 0.5 * capture_tracking,
         # 横向/竖向横向扰动：不是随机扰动，而是沿 LOS 垂直方向的固定试探。
         pn_trend + 0.35 * a_max * lateral,
         pn_trend - 0.35 * a_max * lateral,
