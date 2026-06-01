@@ -29,7 +29,7 @@ from pythonsimulation.state import SimulationResult
 
 ALGORITHM_COLORS = {
     "basic": (0.45, 0.45, 0.45, 1.0),
-    "pn": (0.12, 0.38, 0.95, 1.0),
+    "basic_fov": (0.12, 0.38, 0.95, 1.0),
     "pn_fov": (1.0, 0.55, 0.12, 1.0),
     "pn_fov_cbf": (0.15, 0.65, 0.22, 1.0),
     "pn_fov_mppi": (0.9, 0.18, 0.18, 1.0),

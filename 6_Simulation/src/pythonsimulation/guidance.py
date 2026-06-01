@@ -21,14 +21,11 @@ from pythonsimulation.state import PursuerState, TargetState
 
 @dataclass(slots=True)
 class GuidanceMemory:
-    # FOV 算法看不见目标时，只能使用最后一次观测到的位置和速度做短时预测。
-    last_seen_target: TargetState | None = None
-    lost_time: float = 0.0
     # NMPC 代价中的平滑项需要知道上一步实际使用的加速度。
     previous_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # MPPI 使用随机采样；第一次使用时按 config 中的 seed 初始化，保证仿真可复现。
     mppi_rng: np.random.Generator | None = None
-    # sensor_pn 使用深度相机位置量测，再通过 α-β 滤波估计目标地面系位置和速度。
+    # 所有算法统一使用深度相机位置量测，再通过 α-β 滤波估计目标地面系位置和速度。
     sensor_initialized: bool = False
     sensor_position_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
     sensor_velocity_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
@@ -41,7 +38,7 @@ class GuidanceMemory:
 class GuidanceResult:
     # acceleration 是导引律建议的加速度；真正执行前还会在 simulation.py 中统一限幅。
     acceleration: np.ndarray
-    # visible 表示当前真实目标是否在视场内，用于 FOV 指标和可见性曲线。
+    # visible 表示当前目标是否被算法视为可见；无视线角限制的算法会始终为 True。
     visible: bool
     # los_angle 是目标方向与机头/相机前向之间的夹角，单位是弧度。
     los_angle: float
@@ -86,7 +83,7 @@ def sensor_target_reference(
     config: SimulationConfig,
     dt: float,
 ) -> tuple[TargetState | None, bool, float]:
-    # sensor_pn 只有在目标处于当前相机视场内时才允许产生深度相机量测。
+    # 只有在目标处于当前相机视场内时才允许产生深度相机量测；否则只能使用估计器预测。
     visible, los_angle = fov_visibility(
         pursuer.position,
         pursuer.yaw,
@@ -170,51 +167,32 @@ def compute_guidance(
     config: SimulationConfig,
     dt: float,
 ) -> GuidanceResult:
-    # 先统一计算真实目标是否在当前 FOV 内；无 FOV 的算法只把它作为绘图数据。
-    visible, los_angle = fov_visibility(
-        pursuer.position,
-        pursuer.yaw,
-        pursuer.pitch,
-        target.position,
-        config.guidance.fov_half_angle,
-    )
-
     if algorithm == "basic":
-        acceleration = direct_pursuit(pursuer, target, config)
-        # basic/pn 是理想传感器假设：目标始终可用于导引，所以 visible 强制记为 True。
-        return GuidanceResult(acceleration, True, los_angle, target.position.copy())
-
-    if algorithm == "pn":
-        acceleration = pn_guidance(pursuer, target, config)
-        return GuidanceResult(acceleration, True, los_angle, target.position.copy())
-
-    if algorithm == "sensor_pn":
-        reference_target, sensor_visible, sensor_los_angle = sensor_target_reference(
-            pursuer,
-            target,
-            memory,
-            config,
-            dt,
+        _, los_angle = fov_visibility(
+            pursuer.position,
+            pursuer.yaw,
+            pursuer.pitch,
+            target.position,
+            config.guidance.fov_half_angle,
         )
-        if reference_target is None:
-            # 初始不可见且滤波器尚未初始化：按用户确认的最小策略返回零加速度。
-            forward = forward_from_yaw_pitch(pursuer.yaw, pursuer.pitch)
-            return GuidanceResult(
-                np.zeros(3),
-                False,
-                sensor_los_angle,
-                pursuer.position + 10.0 * forward,
-            )
+        acceleration = direct_pursuit(pursuer, target, config)
+        return GuidanceResult(acceleration, True, los_angle, target.position.copy())
 
-        acceleration = pn_guidance(pursuer, reference_target, config)
-        if not sensor_visible:
-            acceleration *= config.guidance.lost_guidance_gain
-        return GuidanceResult(acceleration, sensor_visible, sensor_los_angle, reference_target.position.copy())
-
-    if algorithm not in {"pn_fov", "pn_fov_cbf", "pn_fov_nmpc", "pn_fov_mppi"}:
+    if algorithm not in {"basic_fov", "pn_fov", "pn_fov_cbf", "pn_fov_nmpc", "pn_fov_mppi"}:
         raise ValueError(f"Unknown algorithm: {algorithm!r}")
 
-    reference_target = _target_reference_for_fov(target, memory, visible, dt)
+    reference_target, visible, los_angle = sensor_target_reference(pursuer, target, memory, config, dt)
+    if reference_target is None:
+        # 初始不可见且滤波器尚未初始化：FOV 限制算法统一返回零加速度，不偷看真实目标。
+        forward = forward_from_yaw_pitch(pursuer.yaw, pursuer.pitch)
+        return GuidanceResult(np.zeros(3), False, los_angle, pursuer.position + 10.0 * forward)
+
+    if algorithm == "basic_fov":
+        acceleration = direct_pursuit(pursuer, reference_target, config)
+        if not visible:
+            acceleration *= config.guidance.lost_guidance_gain
+        return GuidanceResult(acceleration, visible, los_angle, reference_target.position.copy())
+
     acceleration = pn_guidance(pursuer, reference_target, config)
     if not visible:
         # 丢失目标时仍沿预测点搜索，但降低导引强度，避免基于旧信息过度机动。
@@ -233,25 +211,6 @@ def compute_guidance(
         acceleration = mppi_acceleration(pursuer, reference_target, acceleration, memory, config)
 
     return GuidanceResult(acceleration, visible, los_angle, reference_target.position.copy())
-
-
-def _target_reference_for_fov(
-    target: TargetState,
-    memory: GuidanceMemory,
-    visible: bool,
-    dt: float,
-) -> TargetState:
-    if visible or memory.last_seen_target is None:
-        # 看得见目标时刷新最后观测状态；第一次看不见时也用真实目标初始化，避免空引用。
-        memory.last_seen_target = target.copy()
-        memory.lost_time = 0.0
-        return target
-
-    memory.lost_time += dt
-    last_seen = memory.last_seen_target
-    # 初版不“偷看”真实未来轨迹，只假设目标保持最后观测到的速度匀速运动。
-    predicted_position = last_seen.position + last_seen.velocity * memory.lost_time
-    return TargetState(predicted_position, last_seen.velocity.copy(), np.zeros(3))
 
 
 def nmpc_acceleration(

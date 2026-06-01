@@ -8,13 +8,12 @@ import numpy as np
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # 这样新增算法/场景时不容易出现“命令行能选，但仿真循环没跑”的不一致。
 SCENARIOS = ("stationary", "linear", "circle")
-ALGORITHMS = ("basic", "pn", "sensor_pn", "pn_fov", "pn_fov_cbf", "pn_fov_mppi", "pn_fov_nmpc")
+ALGORITHMS = ("basic", "basic_fov", "pn_fov", "pn_fov_cbf", "pn_fov_mppi", "pn_fov_nmpc")
 
 # 内部算法名适合写代码，图表标签适合给人看；分开保存可以避免到处写重复字符串。
 ALGORITHM_LABELS = {
     "basic": "Direct pursuit",
-    "pn": "3D PN",
-    "sensor_pn": "Sensor PN",
+    "basic_fov": "Direct pursuit + FOV",
     "pn_fov": "PN + FOV",
     "pn_fov_cbf": "PN + FOV + CBF",
     "pn_fov_mppi": "PN + FOV + MPPI",
@@ -66,7 +65,7 @@ class GuidanceConfig:
     # k_close 和 v_des_along_los 给 PN 加一个沿视线方向的“主动接近”速度目标。
     pn_k_close: float = 1.0
     pn_v_des_along_los: float = 8.0
-    # sensor_pn 使用深度相机位置量测和 α-β 滤波估计目标位置/速度。
+    # FOV 限制算法使用深度相机位置量测和 α-β 滤波估计目标位置/速度。
     sensor_ab_alpha: float = 0.85
     sensor_ab_beta: float = 0.25
     # fov_deg 是总视场角，真正判断时会用半角：目标方向夹角 <= fov_deg/2。
