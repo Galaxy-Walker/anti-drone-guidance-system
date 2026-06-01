@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,11 @@ ALGORITHM_GRID = (2, 3)
 
 
 def _algorithm_plot_grid(results: dict[str, SimulationResult]) -> tuple[int, int]:
-    return (1, 1) if len(results) == 1 else ALGORITHM_GRID
+    if len(results) == 1:
+        return (1, 1)
+    columns = ALGORITHM_GRID[1]
+    rows = max(ALGORITHM_GRID[0], math.ceil(len(results) / columns))
+    return rows, columns
 
 
 def _make_algorithm_axes(

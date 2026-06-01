@@ -52,6 +52,21 @@ def forward_from_yaw_pitch(yaw: float, pitch: float) -> np.ndarray:
     ])
 
 
+def rotation_world_from_yaw_pitch(yaw: float, pitch: float) -> np.ndarray:
+    # 简化姿态模型只显式保存 yaw/pitch，因此这里采用 roll=0 的机体系。
+    # 约定 body x 为机头/相机光轴前向，body y 为左侧，body z 为上方；返回矩阵满足：
+    #   v_world = R_world_body @ v_body
+    # 且第一列严格等于 forward_from_yaw_pitch(yaw, pitch)。
+    forward = normalize(forward_from_yaw_pitch(yaw, pitch))
+    world_up = np.array([0.0, 0.0, 1.0])
+    left = normalize(np.cross(world_up, forward))
+    if norm(left) < EPS:
+        # 机头接近竖直时 forward 与 world_up 近乎平行，使用 yaw 定义一个稳定左轴。
+        left = np.array([-np.sin(yaw), np.cos(yaw), 0.0])
+    up = normalize(np.cross(forward, left))
+    return np.column_stack((forward, left, up))
+
+
 def yaw_pitch_to_target(origin: np.ndarray, target: np.ndarray) -> tuple[float, float]:
     direction = np.asarray(target, dtype=float) - np.asarray(origin, dtype=float)
     horizontal = float(np.hypot(direction[0], direction[1]))

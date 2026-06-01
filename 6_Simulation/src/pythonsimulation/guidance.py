@@ -5,8 +5,17 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from pythonsimulation.config import SimulationConfig
+from pythonsimulation.depth_camera import camera_point_to_world, simulate_depth_camera_point
 from pythonsimulation.dynamics import step_pursuer
-from pythonsimulation.math_utils import EPS, clamp_norm, forward_from_yaw_pitch, fov_visibility, norm, normalize
+from pythonsimulation.math_utils import (
+    EPS,
+    clamp_norm,
+    forward_from_yaw_pitch,
+    fov_visibility,
+    norm,
+    normalize,
+    wrap_angle,
+)
 from pythonsimulation.state import PursuerState, TargetState
 
 
@@ -19,6 +28,13 @@ class GuidanceMemory:
     previous_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # MPPI 使用随机采样；第一次使用时按 config 中的 seed 初始化，保证仿真可复现。
     mppi_rng: np.random.Generator | None = None
+    # sensor_pn 使用深度相机位置量测，再通过 α-β 滤波估计目标地面系位置和速度。
+    sensor_initialized: bool = False
+    sensor_position_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    sensor_velocity_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    # 当前仿真没有完整 IMU；这里用 yaw/pitch 差分保留近似角速度，便于后续扩展补偿项。
+    previous_yaw: float | None = None
+    previous_pitch: float | None = None
 
 
 @dataclass(slots=True)
@@ -63,6 +79,89 @@ def pn_guidance(pursuer: PursuerState, target: TargetState, config: SimulationCo
     return a_pn + a_close
 
 
+def sensor_target_reference(
+    pursuer: PursuerState,
+    target: TargetState,
+    memory: GuidanceMemory,
+    config: SimulationConfig,
+    dt: float,
+) -> tuple[TargetState | None, bool, float]:
+    # sensor_pn 只有在目标处于当前相机视场内时才允许产生深度相机量测。
+    visible, los_angle = fov_visibility(
+        pursuer.position,
+        pursuer.yaw,
+        pursuer.pitch,
+        target.position,
+        config.guidance.fov_half_angle,
+    )
+    _update_imu_rate_memory(pursuer, memory, dt)
+
+    if visible:
+        point_body = simulate_depth_camera_point(pursuer, target)
+        if point_body is None:
+            return alpha_beta_sensor_predict(memory, dt), False, los_angle
+        measured_position = camera_point_to_world(pursuer, point_body)
+        return alpha_beta_sensor_update(memory, measured_position, dt, config), True, los_angle
+
+    # 目标不可见时不能偷看真实目标；若已经初始化，则只使用滤波器常速度预测。
+    return alpha_beta_sensor_predict(memory, dt), False, los_angle
+
+
+def _update_imu_rate_memory(pursuer: PursuerState, memory: GuidanceMemory, dt: float) -> tuple[float, float]:
+    # 第一版的地面系位置估计通过每帧姿态矩阵完成机体转动修正；角速度暂不直接参与滤波。
+    # 仍然记录 yaw/pitch 差分，作为后续机体系速度补偿或日志输出的接口。
+    yaw_rate = 0.0
+    pitch_rate = 0.0
+    if memory.previous_yaw is not None:
+        yaw_rate = wrap_angle(pursuer.yaw - memory.previous_yaw) / max(dt, EPS)
+    if memory.previous_pitch is not None:
+        pitch_rate = (pursuer.pitch - memory.previous_pitch) / max(dt, EPS)
+    memory.previous_yaw = pursuer.yaw
+    memory.previous_pitch = pursuer.pitch
+    return yaw_rate, pitch_rate
+
+
+def alpha_beta_sensor_update(
+    memory: GuidanceMemory,
+    measured_position: np.ndarray,
+    dt: float,
+    config: SimulationConfig,
+) -> TargetState:
+    guidance = config.guidance
+    if not memory.sensor_initialized:
+        memory.sensor_position_estimate = measured_position.copy()
+        memory.sensor_velocity_estimate = np.zeros(3)
+        memory.sensor_initialized = True
+        return TargetState(
+            memory.sensor_position_estimate.copy(),
+            memory.sensor_velocity_estimate.copy(),
+            np.zeros(3),
+        )
+
+    position_prediction = memory.sensor_position_estimate + memory.sensor_velocity_estimate * dt
+    velocity_prediction = memory.sensor_velocity_estimate
+    residual = measured_position - position_prediction
+
+    memory.sensor_position_estimate = position_prediction + guidance.sensor_ab_alpha * residual
+    memory.sensor_velocity_estimate = velocity_prediction + (guidance.sensor_ab_beta / max(dt, EPS)) * residual
+    return TargetState(
+        memory.sensor_position_estimate.copy(),
+        memory.sensor_velocity_estimate.copy(),
+        np.zeros(3),
+    )
+
+
+def alpha_beta_sensor_predict(memory: GuidanceMemory, dt: float) -> TargetState | None:
+    if not memory.sensor_initialized:
+        return None
+    memory.sensor_position_estimate = memory.sensor_position_estimate + memory.sensor_velocity_estimate * dt
+    return TargetState(
+        memory.sensor_position_estimate.copy(),
+        memory.sensor_velocity_estimate.copy(),
+        np.zeros(3),
+    )
+
+
 def compute_guidance(
     algorithm: str,
     pursuer: PursuerState,
@@ -88,6 +187,29 @@ def compute_guidance(
     if algorithm == "pn":
         acceleration = pn_guidance(pursuer, target, config)
         return GuidanceResult(acceleration, True, los_angle, target.position.copy())
+
+    if algorithm == "sensor_pn":
+        reference_target, sensor_visible, sensor_los_angle = sensor_target_reference(
+            pursuer,
+            target,
+            memory,
+            config,
+            dt,
+        )
+        if reference_target is None:
+            # 初始不可见且滤波器尚未初始化：按用户确认的最小策略返回零加速度。
+            forward = forward_from_yaw_pitch(pursuer.yaw, pursuer.pitch)
+            return GuidanceResult(
+                np.zeros(3),
+                False,
+                sensor_los_angle,
+                pursuer.position + 10.0 * forward,
+            )
+
+        acceleration = pn_guidance(pursuer, reference_target, config)
+        if not sensor_visible:
+            acceleration *= config.guidance.lost_guidance_gain
+        return GuidanceResult(acceleration, sensor_visible, sensor_los_angle, reference_target.position.copy())
 
     if algorithm not in {"pn_fov", "pn_fov_cbf", "pn_fov_nmpc", "pn_fov_mppi"}:
         raise ValueError(f"Unknown algorithm: {algorithm!r}")
