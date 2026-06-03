@@ -202,12 +202,24 @@ def _candidate_accelerations(
 ) -> list[np.ndarray]:
     guidance = config.guidance
     a_max = config.pursuer.a_max
-    r_unit = normalize_xy(target.position - pursuer.position)
+    position_error = target.position - pursuer.position
+    velocity_error = target.velocity - pursuer.velocity
+    r_unit = normalize_xy(position_error)
     intercept_velocity = guidance.pn_v_des_along_los * r_unit
     intercept = (intercept_velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
     same_speed_velocity = norm_xy(target.velocity) * r_unit
     same_speed = (same_speed_velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
     velocity_match = (target.velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
+
+    # 末端稳定跟踪候选：不是在接近末端额外加速，而是把 NMPC 的候选控制中
+    # 显式加入“位置误差 + 相对速度误差 + 目标当前加速度前馈”的稳态跟踪模式。
+    # 对圆周目标，target.acceleration 提供保持同轨迹所需的向心前馈；
+    # velocity_error 项抑制掠过目标后的振荡，帮助把长期误差压低。
+    tracking_kp = 0.85
+    tracking_kd = 1.75
+    stable_tracking = target.acceleration + tracking_kp * position_error + tracking_kd * velocity_error
+    soft_tracking = target.acceleration + 0.55 * tracking_kp * position_error + 1.15 * tracking_kd * velocity_error
+    velocity_tracking = target.acceleration + 1.45 * velocity_error
 
     lateral = np.array([-r_unit[1], r_unit[0], 0.0])
     if norm_xy(lateral) < EPS:
@@ -223,10 +235,25 @@ def _candidate_accelerations(
         0.5 * pn_trend + 0.5 * same_speed,
         velocity_match,
         0.5 * pn_trend + 0.5 * velocity_match,
+        stable_tracking,
+        soft_tracking,
+        velocity_tracking,
+        0.5 * pn_trend + 0.5 * stable_tracking,
+        0.35 * pn_trend + 0.65 * soft_tracking,
         pn_trend + 0.35 * a_max * lateral,
         pn_trend - 0.35 * a_max * lateral,
     ]
     return [clamp_norm_xy(candidate, a_max) for candidate in raw_candidates]
+
+
+def _predict_target_constant_acceleration(target: TargetState, t_pred: float) -> tuple[np.ndarray, np.ndarray]:
+    predicted_position = target.position + target.velocity * t_pred + 0.5 * target.acceleration * t_pred**2
+    predicted_velocity = target.velocity + target.acceleration * t_pred
+    predicted_position = predicted_position.copy()
+    predicted_velocity = predicted_velocity.copy()
+    predicted_position[2] = 0.0
+    predicted_velocity[2] = 0.0
+    return predicted_position, predicted_velocity
 
 
 def _rollout_cost(
@@ -244,24 +271,37 @@ def _rollout_cost(
     control_cost = 0.0
     smooth_cost = 0.0
     pn_cost = 0.0
+    velocity_cost = 0.0
+    steady_cost = 0.0
 
     for step in range(1, guidance.horizon_steps + 1):
         t_pred = step * guidance.mpc_dt
-        predicted_position = target.position + target.velocity * t_pred
-        predicted_position[2] = 0.0
+        predicted_position, predicted_velocity = _predict_target_constant_acceleration(target, t_pred)
         state = step_pursuer(state, acceleration, predicted_position, config, guidance.mpc_dt)
 
-        path_cost += norm_xy(predicted_position - state.position)
+        distance = norm_xy(predicted_position - state.position)
+        relative_velocity = predicted_velocity - state.velocity
+        path_cost += distance
         control_cost += norm_xy(acceleration) ** 2 * guidance.mpc_dt
         smooth_cost += norm_xy(acceleration - previous_acceleration) ** 2
         pn_cost += norm_xy(acceleration - pn_trend) ** 2
+        velocity_cost += norm_xy(relative_velocity) ** 2 * guidance.mpc_dt
+        if step > guidance.horizon_steps // 2:
+            steady_cost += distance**2 + 0.35 * norm_xy(relative_velocity) ** 2
         previous_acceleration = acceleration
 
-    final_position = target.position + target.velocity * guidance.horizon_steps * guidance.mpc_dt
+    final_position, final_velocity = _predict_target_constant_acceleration(
+        target,
+        guidance.horizon_steps * guidance.mpc_dt,
+    )
     final_distance = norm_xy(final_position - state.position)
+    final_velocity_error = norm_xy(final_velocity - state.velocity)
     return (
         guidance.nmpc_w_dist * final_distance
         + guidance.nmpc_w_path * path_cost
+        + 0.45 * guidance.nmpc_w_dist * final_velocity_error
+        + 0.18 * guidance.nmpc_w_dist * steady_cost
+        + 0.35 * guidance.nmpc_w_path * velocity_cost
         + guidance.nmpc_w_control * control_cost
         + guidance.nmpc_w_smooth * smooth_cost
         + guidance.nmpc_w_pn * pn_cost
