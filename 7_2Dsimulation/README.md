@@ -20,31 +20,31 @@ cd 7_2Dsimulation
 运行默认场景：
 
 ```bash
-python3 main.py
+uv run main.py
 ```
 
 运行全部场景：
 
 ```bash
-python3 main.py --scenario all
+uv run main.py --scenario all
 ```
 
 指定场景、仿真时长和时间步长：
 
 ```bash
-python3 main.py --scenario circle --sim-time 40 --dt 0.05
+uv run main.py --scenario circle --sim-time 40 --dt 0.05
 ```
 
 指定输出目录：
 
 ```bash
-python3 main.py --scenario linear --save-dir outputs/linear_test
+uv run main.py --scenario linear --save-dir outputs/linear_test
 ```
 
 保存图片并弹出显示窗口：
 
 ```bash
-python3 main.py --scenario stationary --show
+uv run main.py --scenario stationary --show
 ```
 
 输出文件默认保存到：
@@ -117,4 +117,34 @@ stationary, linear, circle
 
 ```text
 outputs/gazebo2d/<scenario>/<algorithm>/gazebo_samples.csv
+```
+
+## Gazebo CSV 绘图
+
+`plot_gazebo_csv.py` 用于把 Gazebo 记录的 `gazebo_samples.csv` 转成与纯 Python 仿真相同类型的指标和图片，不包含 FOV 相关输出。
+
+按场景目录汇总绘图，输出到 `outputs/circle/`：
+
+```bash
+uv run plot_gazebo_csv.py \
+  outputs/gazebo2d/circle \
+  --output-dir outputs/circle
+```
+
+也可以只绘制单个算法的 CSV：
+
+```bash
+uv run plot_gazebo_csv.py \
+  outputs/gazebo2d/circle/pn_mppi/gazebo_samples.csv
+```
+
+输出文件包括：
+
+```text
+metrics.csv
+trajectory_xy.png
+distance_error.png
+acceleration.png
+yaw_rate.png
+metrics.png
 ```

@@ -25,7 +25,7 @@ class PursuerState:
 
 @dataclass(slots=True)
 class TargetState:
-    # 目标不受追踪机影响，它的状态完全由 target.py 中的地面轨迹给出。
+    # 目标不受追踪机影响，它的状态完全由 target.py 中的参考轨迹给出。
     position: np.ndarray
     velocity: np.ndarray
     acceleration: np.ndarray

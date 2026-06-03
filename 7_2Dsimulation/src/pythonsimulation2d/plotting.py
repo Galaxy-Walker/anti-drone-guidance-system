@@ -89,7 +89,7 @@ def _plot_trajectory_xy(
     first = next(iter(results.values()))
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         color = _algorithm_color(index)
-        ax.plot(first.target_position[:, 0], first.target_position[:, 1], "k--", label="Ground target")
+        ax.plot(first.target_position[:, 0], first.target_position[:, 1], "k--", label="Target")
         ax.plot(
             result.pursuer_position[:, 0],
             result.pursuer_position[:, 1],
