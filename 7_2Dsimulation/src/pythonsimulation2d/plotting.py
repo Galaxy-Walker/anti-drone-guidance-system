@@ -18,7 +18,7 @@ CORE_METRICS = (
     ("yaw_rate_variance", "Yaw rate variance", "(rad/s)^2", "{:.3f}"),
 )
 
-ALGORITHM_GRID = (2, 3)
+ALGORITHM_GRID = (2, 2)
 
 
 def _algorithm_plot_grid(results: dict[str, SimulationResult]) -> tuple[int, int]:
@@ -70,7 +70,6 @@ def plot_scenario(
     output_dir.mkdir(parents=True, exist_ok=True)
     _plot_trajectory_xy(scenario, results, output_dir, config)
     _plot_distance_error(scenario, results, output_dir, config)
-    _plot_fov_visibility(scenario, results, output_dir, config)
     _plot_acceleration(scenario, results, output_dir)
     _plot_yaw_rate(scenario, results, output_dir, config)
     _plot_metrics(scenario, metrics_table, output_dir)
@@ -91,7 +90,12 @@ def _plot_trajectory_xy(
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         color = _algorithm_color(index)
         ax.plot(first.target_position[:, 0], first.target_position[:, 1], "k--", label="Ground target")
-        ax.plot(result.pursuer_position[:, 0], result.pursuer_position[:, 1], color=color, label="Pursuer @ 8m")
+        ax.plot(
+            result.pursuer_position[:, 0],
+            result.pursuer_position[:, 1],
+            color=color,
+            label=f"Pursuer @ {config.pursuer.fixed_altitude:g}m",
+        )
         captured = np.flatnonzero(result.distance <= config.capture_radius)
         if captured.size:
             point = result.pursuer_position[captured[0]]
@@ -139,38 +143,6 @@ def _plot_distance_error(
     fig.suptitle(f"{scenario}: horizontal distance error")
     fig.tight_layout()
     fig.savefig(output_dir / "distance_error.png", dpi=160)
-
-
-def _plot_fov_visibility(
-    scenario: str,
-    results: dict[str, SimulationResult],
-    output_dir: Path,
-    config: SimulationConfig,
-) -> None:
-    fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
-    fov_deg = np.rad2deg(config.guidance.fov_half_angle)
-    for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
-        color = _algorithm_color(index)
-        visible_ax = ax.twinx()
-        ax.plot(result.time, np.rad2deg(result.los_angle), color=color, label="Horizontal LOS angle")
-        visible_ax.step(result.time, result.visible.astype(float), where="post", color="0.35", alpha=0.7, label="Visible")
-        ax.axhline(fov_deg, color="k", linestyle=":", linewidth=1, label="FOV half angle")
-        ax.set_title(ALGORITHM_LABELS[algorithm])
-        ax.grid(True, alpha=0.3)
-        visible_ax.set_ylim(-0.05, 1.05)
-        visible_ax.set_yticks([0.0, 1.0])
-        if index % axes.shape[1] != axes.shape[1] - 1:
-            visible_ax.set_yticklabels([])
-        else:
-            visible_ax.set_ylabel("visible")
-        lines, labels = ax.get_legend_handles_labels()
-        visible_lines, visible_labels = visible_ax.get_legend_handles_labels()
-        ax.legend(lines + visible_lines, labels + visible_labels, fontsize=7)
-    _hide_unused_axes(axes, len(results))
-    _set_algorithm_grid_labels(axes, len(results), "time [s]", "horizontal LOS angle [deg]")
-    fig.suptitle(f"{scenario}: horizontal LOS/FOV")
-    fig.tight_layout()
-    fig.savefig(output_dir / "fov_visibility.png", dpi=160)
 
 
 def _plot_acceleration(scenario: str, results: dict[str, SimulationResult], output_dir: Path) -> None:

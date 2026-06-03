@@ -3,17 +3,21 @@ from __future__ import annotations
 import numpy as np
 
 from pythonsimulation2d.config import SCENARIOS, SimulationConfig
-from pythonsimulation2d.math_utils import lock_ground_target
+from pythonsimulation2d.math_utils import lock_target_altitude
 from pythonsimulation2d.state import TargetState
 
 
 def target_state(scenario: str, t: float, config: SimulationConfig) -> TargetState:
     target = config.target
     if scenario == "stationary":
-        return TargetState(lock_ground_target(target.stationary_position), np.zeros(3), np.zeros(3))
+        return TargetState(
+            lock_target_altitude(target.stationary_position, target.fixed_altitude),
+            np.zeros(3),
+            np.zeros(3),
+        )
 
     if scenario == "linear":
-        position = lock_ground_target(target.linear_position + target.linear_velocity * t)
+        position = lock_target_altitude(target.linear_position + target.linear_velocity * t, target.fixed_altitude)
         velocity = target.linear_velocity.copy()
         velocity[2] = 0.0
         return TargetState(position, velocity, np.zeros(3))
@@ -23,7 +27,7 @@ def target_state(scenario: str, t: float, config: SimulationConfig) -> TargetSta
         position = np.array([
             target.circle_center[0] + target.circle_radius * np.cos(phase),
             target.circle_center[1] + target.circle_radius * np.sin(phase),
-            0.0,
+            target.fixed_altitude,
         ])
         velocity = np.array([
             -target.circle_radius * target.circle_omega * np.sin(phase),

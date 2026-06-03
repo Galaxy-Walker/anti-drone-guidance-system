@@ -17,8 +17,6 @@ METRIC_FIELDS = (
     "mean_distance",
     "path_length",
     "control_energy",
-    "lost_duration",
-    "visible_ratio",
 )
 
 
@@ -34,7 +32,6 @@ def compute_metrics(result: SimulationResult, config: SimulationConfig) -> dict[
     capture_time = float(result.time[captured[0]]) if captured.size else float(config.sim_time)
     step_distances = np.linalg.norm(np.diff(result.pursuer_position[:, :2], axis=0), axis=1)
     acceleration_norm_sq = np.sum(result.acceleration[:, :2] ** 2, axis=1)
-    visible_ratio = float(np.mean(result.visible)) if result.visible.size else 0.0
     yaw_rate = yaw_rate_command(result.yaw, config.dt)
     yaw_rate_mean = float(np.mean(np.abs(yaw_rate))) if yaw_rate.size else 0.0
     yaw_rate_variance = float(np.var(yaw_rate)) if yaw_rate.size else 0.0
@@ -46,8 +43,6 @@ def compute_metrics(result: SimulationResult, config: SimulationConfig) -> dict[
         "mean_distance": float(np.mean(result.distance)),
         "path_length": float(np.sum(step_distances)),
         "control_energy": float(np.sum(acceleration_norm_sq) * config.dt),
-        "lost_duration": float(np.sum(~result.visible) * config.dt),
-        "visible_ratio": visible_ratio,
     }
 
 

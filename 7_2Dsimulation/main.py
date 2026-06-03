@@ -62,7 +62,6 @@ def print_summary(scenario: str, output_dir: Path, metrics_table: dict[str, dict
         print(
             f"  {algorithm}: capture_time={values['capture_time']:.2f}s, "
             f"min_distance={values['min_distance']:.2f}m, "
-            f"lost_duration={values['lost_duration']:.2f}s, "
             f"yaw_rate_mean={values['yaw_rate_mean']:.3f}rad/s, "
             f"yaw_rate_var={values['yaw_rate_variance']:.3f}"
         )

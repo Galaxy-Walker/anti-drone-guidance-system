@@ -11,7 +11,7 @@ class PursuerState:
     position: np.ndarray
     velocity: np.ndarray
     acceleration: np.ndarray
-    # yaw 表示水平面内机头/相机朝向，用于水平扇形 FOV。
+    # yaw 表示水平面内机头朝向。
     yaw: float
 
     def copy(self) -> "PursuerState":
@@ -47,5 +47,3 @@ class SimulationResult:
     acceleration: np.ndarray
     yaw: np.ndarray
     distance: np.ndarray
-    visible: np.ndarray
-    los_angle: np.ndarray

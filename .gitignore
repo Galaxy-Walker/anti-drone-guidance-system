@@ -65,8 +65,8 @@ compile_commands.json
 *.exe
 
 # ROS 工作区中的第三方 PX4 消息和桥接包
-[3456]_*/src/px4_ros_com/
-[3456]_*/src/px4_msgs/
+[34567]_*/src/px4_ros_com/
+[34567]_*/src/px4_msgs/
 
 # ROS bag 和仿真输出
 *.db3

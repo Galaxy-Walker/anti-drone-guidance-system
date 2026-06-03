@@ -11,7 +11,7 @@ from pythonsimulation2d.target import target_state
 
 
 def run_scenario(scenario: str, config: SimulationConfig) -> dict[str, SimulationResult]:
-    # 同一个地面目标场景下依次跑所有算法，保证初始条件和约束完全一致。
+    # 同一个目标场景下依次跑所有算法，保证初始条件和约束完全一致。
     return {algorithm: run_algorithm(scenario, algorithm, config) for algorithm in ALGORITHMS}
 
 
@@ -27,8 +27,6 @@ def run_algorithm(scenario: str, algorithm: str, config: SimulationConfig) -> Si
     accelerations: list[np.ndarray] = []
     yaws: list[float] = []
     distances: list[float] = []
-    visible_values: list[bool] = []
-    los_angles: list[float] = []
 
     for t in times:
         target = target_state(scenario, float(t), config)
@@ -42,8 +40,6 @@ def run_algorithm(scenario: str, algorithm: str, config: SimulationConfig) -> Si
         accelerations.append(applied_acceleration.copy())
         yaws.append(pursuer.yaw)
         distances.append(norm_xy(target.position - pursuer.position))
-        visible_values.append(guidance.visible)
-        los_angles.append(guidance.los_angle)
 
         pursuer = step_pursuer(pursuer, applied_acceleration, guidance.look_at_position, config, config.dt)
         memory.previous_acceleration = pursuer.acceleration.copy()
@@ -59,6 +55,4 @@ def run_algorithm(scenario: str, algorithm: str, config: SimulationConfig) -> Si
         acceleration=np.array(accelerations),
         yaw=np.array(yaws),
         distance=np.array(distances),
-        visible=np.array(visible_values, dtype=bool),
-        los_angle=np.array(los_angles),
     )

@@ -32,7 +32,7 @@ def step_pursuer(
     velocity = clamp_norm_xy(state.velocity + acceleration * dt, pursuer.v_max)
     position = lock_pursuer_altitude(state.position + velocity * dt, pursuer.fixed_altitude)
 
-    # 相机/机头朝向由 look_at_position 的水平投影决定。
+    # 机头朝向由 look_at_position 的水平投影决定。
     yaw = update_yaw_toward(
         state.yaw,
         state.position,

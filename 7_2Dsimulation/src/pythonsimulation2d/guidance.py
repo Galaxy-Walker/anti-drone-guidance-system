@@ -6,15 +6,7 @@ import numpy as np
 
 from pythonsimulation2d.config import SimulationConfig
 from pythonsimulation2d.dynamics import step_pursuer
-from pythonsimulation2d.math_utils import (
-    EPS,
-    clamp_norm_xy,
-    forward_from_yaw,
-    fov_visibility,
-    norm_xy,
-    normalize_xy,
-    wrap_angle,
-)
+from pythonsimulation2d.math_utils import EPS, clamp_norm_xy, norm_xy, normalize_xy
 from pythonsimulation2d.state import PursuerState, TargetState
 
 
@@ -23,18 +15,11 @@ class GuidanceMemory:
     # NMPC/MPPI 平滑项需要知道上一步实际使用的水平加速度。
     previous_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     mppi_rng: np.random.Generator | None = None
-    # FOV 算法统一使用水平可见量测，再通过 α-β 滤波估计目标 XY 位置和速度。
-    sensor_initialized: bool = False
-    sensor_position_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    sensor_velocity_estimate: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    previous_yaw: float | None = None
 
 
 @dataclass(slots=True)
 class GuidanceResult:
     acceleration: np.ndarray
-    visible: bool
-    los_angle: float
     look_at_position: np.ndarray
 
 
@@ -66,75 +51,6 @@ def pn_guidance(pursuer: PursuerState, target: TargetState, config: SimulationCo
     return clamp_norm_xy(a_pn + a_close, config.pursuer.a_max)
 
 
-def sensor_target_reference(
-    pursuer: PursuerState,
-    target: TargetState,
-    memory: GuidanceMemory,
-    config: SimulationConfig,
-    dt: float,
-) -> tuple[TargetState | None, bool, float]:
-    visible, los_angle = fov_visibility(
-        pursuer.position,
-        pursuer.yaw,
-        target.position,
-        config.guidance.fov_half_angle,
-    )
-    _update_yaw_rate_memory(pursuer, memory, dt)
-
-    if visible:
-        measured_position = target.position.copy()
-        measured_position[2] = 0.0
-        return alpha_beta_sensor_update(memory, measured_position, dt, config), True, los_angle
-
-    return alpha_beta_sensor_predict(memory, dt), False, los_angle
-
-
-def _update_yaw_rate_memory(pursuer: PursuerState, memory: GuidanceMemory, dt: float) -> float:
-    yaw_rate = 0.0
-    if memory.previous_yaw is not None:
-        yaw_rate = wrap_angle(pursuer.yaw - memory.previous_yaw) / max(dt, EPS)
-    memory.previous_yaw = pursuer.yaw
-    return yaw_rate
-
-
-def alpha_beta_sensor_update(
-    memory: GuidanceMemory,
-    measured_position: np.ndarray,
-    dt: float,
-    config: SimulationConfig,
-) -> TargetState:
-    guidance = config.guidance
-    measured_position = measured_position.copy()
-    measured_position[2] = 0.0
-    if not memory.sensor_initialized:
-        memory.sensor_position_estimate = measured_position.copy()
-        memory.sensor_velocity_estimate = np.zeros(3)
-        memory.sensor_initialized = True
-        return TargetState(memory.sensor_position_estimate.copy(), memory.sensor_velocity_estimate.copy(), np.zeros(3))
-
-    position_prediction = memory.sensor_position_estimate + memory.sensor_velocity_estimate * dt
-    position_prediction[2] = 0.0
-    velocity_prediction = memory.sensor_velocity_estimate.copy()
-    velocity_prediction[2] = 0.0
-    residual = measured_position - position_prediction
-    residual[2] = 0.0
-
-    memory.sensor_position_estimate = position_prediction + guidance.sensor_ab_alpha * residual
-    memory.sensor_position_estimate[2] = 0.0
-    memory.sensor_velocity_estimate = velocity_prediction + (guidance.sensor_ab_beta / max(dt, EPS)) * residual
-    memory.sensor_velocity_estimate[2] = 0.0
-    return TargetState(memory.sensor_position_estimate.copy(), memory.sensor_velocity_estimate.copy(), np.zeros(3))
-
-
-def alpha_beta_sensor_predict(memory: GuidanceMemory, dt: float) -> TargetState | None:
-    if not memory.sensor_initialized:
-        return None
-    memory.sensor_position_estimate = memory.sensor_position_estimate + memory.sensor_velocity_estimate * dt
-    memory.sensor_position_estimate[2] = 0.0
-    memory.sensor_velocity_estimate[2] = 0.0
-    return TargetState(memory.sensor_position_estimate.copy(), memory.sensor_velocity_estimate.copy(), np.zeros(3))
-
-
 def compute_guidance(
     algorithm: str,
     pursuer: PursuerState,
@@ -143,96 +59,22 @@ def compute_guidance(
     config: SimulationConfig,
     dt: float,
 ) -> GuidanceResult:
-    if algorithm == "basic":
-        _, los_angle = fov_visibility(pursuer.position, pursuer.yaw, target.position, config.guidance.fov_half_angle)
-        acceleration = direct_pursuit(pursuer, target, config)
-        return GuidanceResult(acceleration, True, los_angle, target.position.copy())
+    del dt  # 当前导引律的离散步长由 config.dt/guidance.mpc_dt 统一管理。
 
-    if algorithm not in {"basic_fov", "pn_fov", "pn_fov_cbf", "pn_fov_nmpc", "pn_fov_mppi"}:
+    if algorithm == "basic":
+        acceleration = direct_pursuit(pursuer, target, config)
+    elif algorithm == "pn":
+        acceleration = pn_guidance(pursuer, target, config)
+    elif algorithm == "pn_nmpc":
+        pn_trend = pn_guidance(pursuer, target, config)
+        acceleration = nmpc_acceleration(pursuer, target, pn_trend, memory, config)
+    elif algorithm == "pn_mppi":
+        pn_trend = pn_guidance(pursuer, target, config)
+        acceleration = mppi_acceleration(pursuer, target, pn_trend, memory, config)
+    else:
         raise ValueError(f"Unknown algorithm: {algorithm!r}")
 
-    reference_target, visible, los_angle = sensor_target_reference(pursuer, target, memory, config, dt)
-    if reference_target is None:
-        forward = forward_from_yaw(pursuer.yaw)
-        return GuidanceResult(np.zeros(3), False, los_angle, pursuer.position + 10.0 * forward)
-
-    if algorithm == "basic_fov":
-        acceleration = direct_pursuit(pursuer, reference_target, config)
-        if not visible:
-            acceleration *= config.guidance.lost_guidance_gain
-        return GuidanceResult(clamp_norm_xy(acceleration, config.pursuer.a_max), visible, los_angle, reference_target.position.copy())
-
-    acceleration = pn_guidance(pursuer, reference_target, config)
-    if not visible:
-        acceleration *= config.guidance.lost_guidance_gain
-
-    if algorithm == "pn_fov_cbf":
-        acceleration = fov_cbf_acceleration(pursuer, reference_target, acceleration, config)
-    if algorithm == "pn_fov_nmpc":
-        acceleration = nmpc_acceleration(pursuer, reference_target, acceleration, memory, config)
-    if algorithm == "pn_fov_mppi":
-        acceleration = mppi_acceleration(pursuer, reference_target, acceleration, memory, config)
-
-    return GuidanceResult(clamp_norm_xy(acceleration, config.pursuer.a_max), visible, los_angle, reference_target.position.copy())
-
-
-def fov_cbf_acceleration(
-    pursuer: PursuerState,
-    target_reference: TargetState,
-    nominal_acceleration: np.ndarray,
-    config: SimulationConfig,
-) -> np.ndarray:
-    guidance = config.guidance
-    r_unit = normalize_xy(target_reference.position - pursuer.position)
-    if norm_xy(r_unit) < EPS:
-        return nominal_acceleration
-
-    forward = forward_from_yaw(pursuer.yaw)
-    los_angle = float(np.arccos(np.clip(np.dot(forward[:2], r_unit[:2]), -1.0, 1.0)))
-    margin = np.deg2rad(guidance.cbf_fov_margin_deg)
-    soft_limit = max(0.0, guidance.fov_half_angle - margin)
-    if los_angle <= soft_limit:
-        return nominal_acceleration
-
-    lateral_error = r_unit - float(np.dot(r_unit[:2], forward[:2])) * forward
-    lateral_direction = normalize_xy(lateral_error)
-    if norm_xy(lateral_direction) < EPS:
-        return nominal_acceleration
-
-    severity = (los_angle - soft_limit) / max(guidance.fov_half_angle - soft_limit, EPS)
-    severity = float(np.clip(severity, 0.0, 1.5))
-    correction = guidance.cbf_gain * severity * config.pursuer.a_max * lateral_direction
-    match_weight = 0.45 * min(severity, 1.0)
-    velocity_match = (target_reference.velocity - pursuer.velocity) / max(guidance.direct_tau, EPS)
-    filtered = (1.0 - match_weight) * nominal_acceleration + match_weight * velocity_match + correction
-    filtered = clamp_norm_xy(filtered, config.pursuer.a_max)
-    if _one_step_fov_score(pursuer, target_reference, filtered, config) > _one_step_fov_score(
-        pursuer,
-        target_reference,
-        nominal_acceleration,
-        config,
-    ):
-        return nominal_acceleration
-    return filtered
-
-
-def _one_step_fov_score(
-    pursuer: PursuerState,
-    target_reference: TargetState,
-    acceleration: np.ndarray,
-    config: SimulationConfig,
-) -> float:
-    predicted_target_position = target_reference.position + target_reference.velocity * config.dt
-    predicted_target_position[2] = 0.0
-    predicted_pursuer = step_pursuer(pursuer, acceleration, predicted_target_position, config, config.dt)
-    _, los_angle = fov_visibility(
-        predicted_pursuer.position,
-        predicted_pursuer.yaw,
-        predicted_target_position,
-        config.guidance.fov_half_angle,
-    )
-    distance = norm_xy(predicted_target_position - predicted_pursuer.position)
-    return los_angle + 0.01 * distance
+    return GuidanceResult(clamp_norm_xy(acceleration, config.pursuer.a_max), target.position.copy())
 
 
 def nmpc_acceleration(
@@ -308,11 +150,9 @@ def _mppi_sequence_costs(
     sample_count = acceleration_sequences.shape[0]
     position = np.repeat(pursuer.position[None, :], sample_count, axis=0)
     velocity = np.repeat(pursuer.velocity[None, :], sample_count, axis=0)
-    yaw = np.full(sample_count, pursuer.yaw)
     previous_acceleration = np.repeat(memory.previous_acceleration[None, :], sample_count, axis=0)
 
     path_cost = np.zeros(sample_count)
-    fov_cost = np.zeros(sample_count)
     control_cost = np.zeros(sample_count)
     smooth_cost = np.zeros(sample_count)
     pn_cost = np.zeros(sample_count)
@@ -327,23 +167,8 @@ def _mppi_sequence_costs(
         position = position + velocity * guidance.mpc_dt
         position[:, 2] = config.pursuer.fixed_altitude
 
-        target_direction_xy = predicted_position[:2] - position[:, :2]
-        target_yaw = np.arctan2(target_direction_xy[:, 1], target_direction_xy[:, 0])
-        yaw_delta = np.clip(
-            _wrap_angles(target_yaw - yaw),
-            -config.pursuer.yaw_rate_max * guidance.mpc_dt,
-            config.pursuer.yaw_rate_max * guidance.mpc_dt,
-        )
-        yaw = _wrap_angles(yaw + yaw_delta)
-
-        distance = np.linalg.norm(target_direction_xy, axis=1)
-        forward_xy = np.column_stack((np.cos(yaw), np.sin(yaw)))
-        target_unit_xy = target_direction_xy / np.maximum(distance[:, None], EPS)
-        los_angle = np.arccos(np.clip(np.sum(forward_xy * target_unit_xy, axis=1), -1.0, 1.0))
-        fov_violation = np.maximum(0.0, los_angle - guidance.fov_half_angle)
-
+        distance = np.linalg.norm(predicted_position[:2] - position[:, :2], axis=1)
         path_cost += distance
-        fov_cost += fov_violation**2
         control_cost += np.sum(acceleration[:, :2] ** 2, axis=1) * guidance.mpc_dt
         smooth_cost += np.sum((acceleration[:, :2] - previous_acceleration[:, :2]) ** 2, axis=1)
         pn_cost += np.sum((acceleration[:, :2] - pn_trend[:2]) ** 2, axis=1)
@@ -354,7 +179,6 @@ def _mppi_sequence_costs(
     return (
         guidance.nmpc_w_dist * final_distance
         + guidance.nmpc_w_path * path_cost
-        + guidance.nmpc_w_fov * fov_cost
         + guidance.nmpc_w_control * control_cost
         + guidance.nmpc_w_smooth * smooth_cost
         + guidance.nmpc_w_pn * pn_cost
@@ -368,10 +192,6 @@ def _clamp_rows_xy(vectors: np.ndarray, max_norm: float) -> np.ndarray:
     scales = np.minimum(1.0, max_norm / np.maximum(row_norms, EPS))
     result[:, :2] *= scales
     return result
-
-
-def _wrap_angles(angles: np.ndarray) -> np.ndarray:
-    return (angles + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def _candidate_accelerations(
@@ -421,7 +241,6 @@ def _rollout_cost(
     state = pursuer.copy()
     previous_acceleration = memory.previous_acceleration
     path_cost = 0.0
-    fov_cost = 0.0
     control_cost = 0.0
     smooth_cost = 0.0
     pn_cost = 0.0
@@ -432,11 +251,7 @@ def _rollout_cost(
         predicted_position[2] = 0.0
         state = step_pursuer(state, acceleration, predicted_position, config, guidance.mpc_dt)
 
-        distance = norm_xy(predicted_position - state.position)
-        _, los_angle = fov_visibility(state.position, state.yaw, predicted_position, guidance.fov_half_angle)
-        if los_angle > guidance.fov_half_angle:
-            fov_cost += (los_angle - guidance.fov_half_angle) ** 2
-        path_cost += distance
+        path_cost += norm_xy(predicted_position - state.position)
         control_cost += norm_xy(acceleration) ** 2 * guidance.mpc_dt
         smooth_cost += norm_xy(acceleration - previous_acceleration) ** 2
         pn_cost += norm_xy(acceleration - pn_trend) ** 2
@@ -447,7 +262,6 @@ def _rollout_cost(
     return (
         guidance.nmpc_w_dist * final_distance
         + guidance.nmpc_w_path * path_cost
-        + guidance.nmpc_w_fov * fov_cost
         + guidance.nmpc_w_control * control_cost
         + guidance.nmpc_w_smooth * smooth_cost
         + guidance.nmpc_w_pn * pn_cost
