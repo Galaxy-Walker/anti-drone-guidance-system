@@ -23,9 +23,15 @@ guidance_node_2d:
 
     target_start_position_tolerance: 0.75
     target_start_velocity_tolerance: 0.75
+    pursuer_takeoff_position_tolerance: 0.75
+    pursuer_takeoff_velocity_tolerance: 0.75
 
     pursuer_system_id: 1
     target_system_id: 2
 
     record_data: true
     record_output_dir: outputs/gazebo2d
+
+    debug_log: false
+    debug_log_period_s: 0.2
+    startup_log_period_s: 1.0

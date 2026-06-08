@@ -81,6 +81,10 @@ class GuidanceNode(Node):
         self._pursuer: PursuerState | None = None
         self._target: TargetState | None = None
         self._active_start_ns: int | None = None
+        self._last_debug_log_ns: int | None = None
+        self._last_startup_log_ns: int | None = None
+        self._pursuer_takeoff_position: np.ndarray | None = None
+        self._tracking_started = False
 
         self._target_offboard_cycles = 0
         self._pursuer_offboard_cycles = 0
@@ -90,6 +94,8 @@ class GuidanceNode(Node):
         self._pursuer_offboard_sent = False
         self._target_ready = False
         self._pursuer_ready = False
+        self._target_ready_logged = False
+        self._pursuer_ready_logged = False
 
         self._target_yaw_enu = 0.0
         self._waiting_logged = False
@@ -180,10 +186,15 @@ class GuidanceNode(Node):
         self.declare_parameter("target_base_altitude", 1.0)
         self.declare_parameter("target_start_position_tolerance", 0.75)
         self.declare_parameter("target_start_velocity_tolerance", 0.75)
+        self.declare_parameter("pursuer_takeoff_position_tolerance", 0.75)
+        self.declare_parameter("pursuer_takeoff_velocity_tolerance", 0.75)
         self.declare_parameter("pursuer_system_id", 1)
         self.declare_parameter("target_system_id", 2)
         self.declare_parameter("record_data", True)
         self.declare_parameter("record_output_dir", "outputs/gazebo2d")
+        self.declare_parameter("debug_log", False)
+        self.declare_parameter("debug_log_period_s", 0.2)
+        self.declare_parameter("startup_log_period_s", 1.0)
 
     def _load_parameters(self) -> None:
         self._algorithm = str(self.get_parameter("algorithm").value)
@@ -212,10 +223,27 @@ class GuidanceNode(Node):
         self._offboard_warmup_cycles = int(self.get_parameter("offboard_warmup_cycles").value)
         self._target_start_position_tolerance = float(self.get_parameter("target_start_position_tolerance").value)
         self._target_start_velocity_tolerance = float(self.get_parameter("target_start_velocity_tolerance").value)
+        self._pursuer_takeoff_position_tolerance = float(
+            self.get_parameter("pursuer_takeoff_position_tolerance").value
+        )
+        self._pursuer_takeoff_velocity_tolerance = float(
+            self.get_parameter("pursuer_takeoff_velocity_tolerance").value
+        )
         self._pursuer_system_id = int(self.get_parameter("pursuer_system_id").value)
         self._target_system_id = int(self.get_parameter("target_system_id").value)
         self._record_data = _as_bool(self.get_parameter("record_data").value)
         self._record_output_dir = Path(str(self.get_parameter("record_output_dir").value)).expanduser()
+        self._debug_log = _as_bool(self.get_parameter("debug_log").value)
+        self._debug_log_period_s = float(self.get_parameter("debug_log_period_s").value)
+        self._startup_log_period_s = float(self.get_parameter("startup_log_period_s").value)
+        if self._pursuer_takeoff_position_tolerance <= 0.0:
+            raise ValueError("pursuer_takeoff_position_tolerance must be positive")
+        if self._pursuer_takeoff_velocity_tolerance < 0.0:
+            raise ValueError("pursuer_takeoff_velocity_tolerance must be non-negative")
+        if self._debug_log_period_s <= 0.0:
+            raise ValueError("debug_log_period_s must be positive")
+        if self._startup_log_period_s <= 0.0:
+            raise ValueError("startup_log_period_s must be positive")
 
     def _pursuer_odometry_callback(self, message: VehicleOdometry) -> None:
         position = ned_to_enu_vector(message.position)
@@ -248,14 +276,29 @@ class GuidanceNode(Node):
         now_us = timestamp_us(self)
         target_start = self._target_start_reference()
 
-        if not self._target_ready:
-            self._prepare_target_at_start(now_us, target_start)
+        if not self._startup_ready():
+            self._prepare_vehicles_for_tracking(now_us, target_start)
             return
 
-        if not self._pursuer_ready:
-            self._prepare_pursuer_for_tracking(now_us, target_start)
-            return
+        if not self._tracking_started:
+            self._start_tracking()
 
+        self._run_tracking_cycle(now_us)
+
+    def _startup_ready(self) -> bool:
+        return self._target_ready and self._pursuer_ready
+
+    def _prepare_vehicles_for_tracking(self, timestamp: int, target_start: TargetState) -> None:
+        self._ensure_pursuer_takeoff_position()
+
+        self._publish_target_setpoint(timestamp, target_start)
+        self._publish_pursuer_takeoff_setpoint(timestamp, target_start.position)
+        self._publish_target_mode_commands(timestamp)
+        self._publish_pursuer_mode_commands(timestamp)
+        self._update_startup_readiness(target_start)
+        self._maybe_log_startup_status(target_start)
+
+    def _run_tracking_cycle(self, timestamp: int) -> None:
         elapsed = self._elapsed_seconds()
         target_reference = self._gazebo_target_reference(elapsed)
         guidance = compute_guidance(
@@ -271,8 +314,21 @@ class GuidanceNode(Node):
         self._memory.previous_acceleration = applied_acceleration.copy()
         self._record_sample(elapsed, applied_acceleration)
 
-        self._publish_target_setpoint(now_us, target_reference)
-        self._publish_pursuer_setpoint(now_us, applied_acceleration, guidance.look_at_position)
+        self._publish_target_setpoint(timestamp, target_reference)
+        desired_velocity, acceleration_setpoint, pursuer_yaw_ned = self._publish_pursuer_setpoint(
+            timestamp,
+            applied_acceleration,
+            guidance.look_at_position,
+        )
+        self._maybe_log_debug(
+            elapsed,
+            target_reference,
+            guidance.acceleration,
+            applied_acceleration,
+            desired_velocity,
+            acceleration_setpoint,
+            pursuer_yaw_ned,
+        )
 
     def _target_start_reference(self) -> TargetState:
         start = self._gazebo_target_reference(0.0)
@@ -291,23 +347,36 @@ class GuidanceNode(Node):
 
         return TargetState(position, velocity, acceleration)
 
-    def _prepare_target_at_start(self, timestamp: int, target_start: TargetState) -> None:
-        self._publish_target_setpoint(timestamp, target_start)
-        self._publish_target_mode_commands(timestamp)
+    def _ensure_pursuer_takeoff_position(self) -> None:
+        if self._pursuer_takeoff_position is not None:
+            return
 
-        if self._target_commands_done() and self._target_at_start(target_start.position):
-            self._target_ready = True
-            self.get_logger().info("target reached scenario start; preparing pursuer")
+        self._pursuer_takeoff_position = self._pursuer.position.copy()
+        self._pursuer_takeoff_position[2] = self._pursuer_fixed_altitude
+        self.get_logger().info(
+            f"locked pursuer takeoff setpoint: p={self._format_vector(self._pursuer_takeoff_position)}"
+        )
 
-    def _prepare_pursuer_for_tracking(self, timestamp: int, target_start: TargetState) -> None:
-        self._publish_target_setpoint(timestamp, target_start)
-        self._publish_pursuer_hold_setpoint(timestamp, target_start.position)
-        self._publish_pursuer_mode_commands(timestamp)
+    def _update_startup_readiness(self, target_start: TargetState) -> None:
+        if not self._target_ready:
+            self._target_ready = self._target_commands_done() and self._target_at_start(target_start.position)
+            if self._target_ready and not self._target_ready_logged:
+                self._target_ready_logged = True
+                self.get_logger().info("target ready at scenario start")
 
-        if self._pursuer_commands_done():
-            self._pursuer_ready = True
-            self._active_start_ns = None
-            self.get_logger().info("pursuer ready; starting 2D tracking and data recording")
+        if not self._pursuer_ready:
+            self._pursuer_ready = self._pursuer_commands_done() and self._pursuer_at_takeoff_position()
+            if self._pursuer_ready and not self._pursuer_ready_logged:
+                self._pursuer_ready_logged = True
+                self.get_logger().info("pursuer ready at fixed takeoff altitude")
+
+    def _start_tracking(self) -> None:
+        self._tracking_started = True
+        self._active_start_ns = None
+        self._last_debug_log_ns = None
+        self._last_startup_log_ns = None
+        self._memory.previous_acceleration = np.zeros(3)
+        self.get_logger().info("both vehicles ready; starting 2D tracking and data recording")
 
     def _record_sample(
         self,
@@ -448,48 +517,141 @@ class GuidanceNode(Node):
         timestamp: int,
         acceleration_enu: np.ndarray,
         look_at_position_enu: np.ndarray,
-    ) -> None:
-        """把 2D guidance 加速度转换成追踪机 XY 位置 setpoint + 固定高度。"""
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """把 2D guidance 加速度转换成追踪机速度 + 加速度 setpoint。"""
+        acceleration_enu = acceleration_enu.copy()
+        acceleration_enu[2] = 0.0
+
         desired_velocity = self._pursuer.velocity.copy()
         desired_velocity[2] = 0.0
         desired_velocity = clamp_norm_xy(desired_velocity + acceleration_enu * self._config.dt, self._config.pursuer.v_max)
 
-        desired_position = self._pursuer.position.copy()
-        desired_position[:2] = desired_position[:2] + desired_velocity[:2] * self._config.dt
-        desired_position[2] = self._pursuer_fixed_altitude
-
         yaw_ned = yaw_to_target_ned(self._pursuer.position, look_at_position_enu)
-        self._pursuer_offboard_pub.publish(offboard_control_mode(timestamp, position=True, velocity=True, acceleration=False))
+        self._pursuer_offboard_pub.publish(offboard_control_mode(timestamp, velocity=True, acceleration=True))
         self._pursuer_setpoint_pub.publish(
             trajectory_setpoint(
                 timestamp,
-                position=enu_to_ned_list(desired_position),
                 velocity=enu_to_ned_list(desired_velocity),
+                acceleration=enu_to_ned_list(acceleration_enu),
                 yaw=yaw_ned,
             )
         )
+        return desired_velocity.copy(), acceleration_enu.copy(), yaw_ned
 
-    def _publish_pursuer_hold_setpoint(self, timestamp: int, look_at_position_enu: np.ndarray) -> None:
-        hold_position = self._pursuer.position.copy()
-        hold_position[2] = self._pursuer_fixed_altitude
+    def _publish_pursuer_takeoff_setpoint(self, timestamp: int, look_at_position_enu: np.ndarray) -> None:
+        if self._pursuer_takeoff_position is None:
+            raise RuntimeError("pursuer takeoff position has not been initialized")
+
         yaw_ned = yaw_to_target_ned(self._pursuer.position, look_at_position_enu)
         self._pursuer_offboard_pub.publish(offboard_control_mode(timestamp, position=True, velocity=True, acceleration=False))
         self._pursuer_setpoint_pub.publish(
             trajectory_setpoint(
                 timestamp,
-                position=enu_to_ned_list(hold_position),
+                position=enu_to_ned_list(self._pursuer_takeoff_position),
                 velocity=enu_to_ned_list(np.zeros(3)),
                 yaw=yaw_ned,
             )
         )
 
-    def _target_at_start(self, start_position_enu: np.ndarray) -> bool:
-        position_error = float(np.linalg.norm(self._target.position - start_position_enu))
-        speed = float(np.linalg.norm(self._target.velocity))
-        return (
-            position_error <= self._target_start_position_tolerance
-            and speed <= self._target_start_velocity_tolerance
+    def _maybe_log_debug(
+        self,
+        elapsed: float,
+        target_reference: TargetState,
+        guidance_acceleration_enu: np.ndarray,
+        applied_acceleration_enu: np.ndarray,
+        desired_velocity_enu: np.ndarray,
+        acceleration_setpoint_enu: np.ndarray,
+        pursuer_yaw_ned: float,
+    ) -> None:
+        if not self._debug_log:
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        if self._last_debug_log_ns is not None:
+            since_last = (now_ns - self._last_debug_log_ns) * 1e-9
+            if since_last < self._debug_log_period_s:
+                return
+        self._last_debug_log_ns = now_ns
+
+        self.get_logger().info(
+            "debug_2d "
+            f"t={elapsed:.2f}s | "
+            f"target_odom p={self._format_vector(self._target.position)} "
+            f"v={self._format_vector(self._target.velocity)} "
+            f"a={self._format_vector(self._target.acceleration)} | "
+            f"target_cmd p={self._format_vector(target_reference.position)} "
+            f"v={self._format_vector(target_reference.velocity)} "
+            f"a={self._format_vector(target_reference.acceleration)} "
+            f"yaw_ned={yaw_enu_to_ned(self._target_yaw_enu):+.3f} | "
+            f"pursuer_odom p={self._format_vector(self._pursuer.position)} "
+            f"v={self._format_vector(self._pursuer.velocity)} "
+            f"a={self._format_vector(self._pursuer.acceleration)} | "
+            "pursuer_cmd mode=velocity+acceleration "
+            f"v_sp={self._format_vector(desired_velocity_enu)} "
+            f"a_sp={self._format_vector(acceleration_setpoint_enu)} "
+            f"raw_a={self._format_vector(guidance_acceleration_enu)} "
+            f"applied_a={self._format_vector(applied_acceleration_enu)} "
+            f"yaw_ned={pursuer_yaw_ned:+.3f}"
         )
+
+    def _maybe_log_startup_status(self, target_start: TargetState) -> None:
+        if self._pursuer_takeoff_position is None:
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        if self._last_startup_log_ns is not None:
+            since_last = (now_ns - self._last_startup_log_ns) * 1e-9
+            if since_last < self._startup_log_period_s:
+                return
+        self._last_startup_log_ns = now_ns
+
+        target_error = float(np.linalg.norm(self._target.position - target_start.position))
+        target_speed = float(np.linalg.norm(self._target.velocity))
+        pursuer_error = float(np.linalg.norm(self._pursuer.position - self._pursuer_takeoff_position))
+        pursuer_speed = float(np.linalg.norm(self._pursuer.velocity))
+        self.get_logger().info(
+            "startup_2d "
+            f"target_ready={self._target_ready} "
+            f"target_err={target_error:.2f} target_speed={target_speed:.2f} "
+            f"target_commands_done={self._target_commands_done()} | "
+            f"pursuer_ready={self._pursuer_ready} "
+            f"pursuer_err={pursuer_error:.2f} pursuer_speed={pursuer_speed:.2f} "
+            f"pursuer_commands_done={self._pursuer_commands_done()}"
+        )
+
+    @staticmethod
+    def _format_vector(vector: np.ndarray) -> str:
+        value = np.asarray(vector, dtype=float)
+        return f"[{value[0]:+.2f}, {value[1]:+.2f}, {value[2]:+.2f}]"
+
+    def _target_at_start(self, start_position_enu: np.ndarray) -> bool:
+        return self._state_at_setpoint(
+            self._target,
+            start_position_enu,
+            self._target_start_position_tolerance,
+            self._target_start_velocity_tolerance,
+        )
+
+    def _pursuer_at_takeoff_position(self) -> bool:
+        if self._pursuer_takeoff_position is None:
+            return False
+        return self._state_at_setpoint(
+            self._pursuer,
+            self._pursuer_takeoff_position,
+            self._pursuer_takeoff_position_tolerance,
+            self._pursuer_takeoff_velocity_tolerance,
+        )
+
+    def _state_at_setpoint(
+        self,
+        state: PursuerState | TargetState,
+        desired_position: np.ndarray,
+        position_tolerance: float,
+        velocity_tolerance: float,
+    ) -> bool:
+        position_error = float(np.linalg.norm(state.position - desired_position))
+        speed = float(np.linalg.norm(state.velocity))
+        return position_error <= position_tolerance and speed <= velocity_tolerance
 
     def _target_commands_done(self) -> bool:
         return (not self._auto_arm or self._target_arm_sent) and (

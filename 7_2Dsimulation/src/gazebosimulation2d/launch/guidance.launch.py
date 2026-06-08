@@ -25,10 +25,15 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("target_base_altitude", default_value="1.0"),
         DeclareLaunchArgument("target_start_position_tolerance", default_value="0.75"),
         DeclareLaunchArgument("target_start_velocity_tolerance", default_value="0.75"),
+        DeclareLaunchArgument("pursuer_takeoff_position_tolerance", default_value="0.75"),
+        DeclareLaunchArgument("pursuer_takeoff_velocity_tolerance", default_value="0.75"),
         DeclareLaunchArgument("pursuer_system_id", default_value="1"),
         DeclareLaunchArgument("target_system_id", default_value="2"),
         DeclareLaunchArgument("record_data", default_value="true"),
         DeclareLaunchArgument("record_output_dir", default_value="outputs/gazebo2d"),
+        DeclareLaunchArgument("debug_log", default_value="false"),
+        DeclareLaunchArgument("debug_log_period_s", default_value="0.2"),
+        DeclareLaunchArgument("startup_log_period_s", default_value="1.0"),
     ]
 
     node = Node(
@@ -53,10 +58,15 @@ def generate_launch_description() -> LaunchDescription:
                 "target_base_altitude": LaunchConfiguration("target_base_altitude"),
                 "target_start_position_tolerance": LaunchConfiguration("target_start_position_tolerance"),
                 "target_start_velocity_tolerance": LaunchConfiguration("target_start_velocity_tolerance"),
+                "pursuer_takeoff_position_tolerance": LaunchConfiguration("pursuer_takeoff_position_tolerance"),
+                "pursuer_takeoff_velocity_tolerance": LaunchConfiguration("pursuer_takeoff_velocity_tolerance"),
                 "pursuer_system_id": LaunchConfiguration("pursuer_system_id"),
                 "target_system_id": LaunchConfiguration("target_system_id"),
                 "record_data": LaunchConfiguration("record_data"),
                 "record_output_dir": LaunchConfiguration("record_output_dir"),
+                "debug_log": LaunchConfiguration("debug_log"),
+                "debug_log_period_s": LaunchConfiguration("debug_log_period_s"),
+                "startup_log_period_s": LaunchConfiguration("startup_log_period_s"),
             },
         ],
     )
