@@ -96,11 +96,16 @@ def _plot_trajectory_xy(
             color=color,
             label=f"Pursuer @ {config.pursuer.fixed_altitude:g}m",
         )
-        captured = np.flatnonzero(result.distance <= config.capture_radius)
-        if captured.size:
-            point = result.pursuer_position[captured[0]]
-            ax.scatter(point[0], point[1], s=25, color=color, label="Capture")
-        ax.scatter(result.pursuer_position[0, 0], result.pursuer_position[0, 1], c="g", marker="o", s=24, label="Start")
+        target_start = first.target_position[0]
+        ax.scatter(target_start[0], target_start[1], c="k", marker="*", s=45, label="Target start")
+        ax.scatter(
+            result.pursuer_position[0, 0],
+            result.pursuer_position[0, 1],
+            c="k",
+            marker="s",
+            s=24,
+            label="Pursuer start",
+        )
         ax.set_title(ALGORITHM_LABELS[algorithm])
         ax.axis("equal")
         ax.grid(True, alpha=0.3)
