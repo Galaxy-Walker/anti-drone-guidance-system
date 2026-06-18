@@ -172,6 +172,8 @@ ros2 launch anti_drone_guidance pn_guidance_launch.py
 ros2 launch anti_drone_guidance pn_guidance_launch.py config_file:=/path/to/custom.yaml
 ```
 
+> **提示**：配置文件（YAML）修改后无需重新 `colcon build`，直接重新 launch 即可生效。
+
 ## Gazebo 闭环评估
 
 评估器不会自动启动 PX4 Gazebo 或 Micro XRCE-DDS Agent。运行评估前，请先在外部终端启动：
@@ -220,3 +222,15 @@ ros2 run anti_drone_guidance gazebo_evaluator --no-restart-prompt
 - `px4_msgs` 与当前 PX4/uXRCE-DDS 输出的话题版本匹配。
 
 如果其中任一环节未完成，ROS 2 节点可能无法正常与 PX4 建立通信。
+
+## 故障排查
+
+### Gazebo SITL 编译卡住（`make px4_sitl` 无响应）
+
+通常是 PX4 子模块未同步导致，在 PX4 目录执行：
+
+```bash
+cd ~/PX4-Autopilot  # 或 ~/Apps/PX4-Autilot，视实际路径而定
+git submodule sync --recursive
+git submodule update --init --recursive
+```

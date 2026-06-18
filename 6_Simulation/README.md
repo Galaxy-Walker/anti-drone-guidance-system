@@ -70,133 +70,27 @@ uv run python main.py --scenario circle --export-mcap
 | `pn_fov_mppi` | PN + FOV + MPPI | 基于 PN 名义控制序列随机采样多条控制序列，用指数权重融合第一步控制。 |
 | `pn_fov_nmpc` | PN + FOV + NMPC | 在 PN 趋势附近枚举候选加速度，滚动预测后选择综合代价最低的控制。 |
 
-### Direct pursuit
+> **📖 算法原理与设计分析**：各算法的详细原理、设计动机和对比分析见 [`docs/algorithm_framework_rationale.md`](docs/algorithm_framework_rationale.md)。整体仿真方法论见 [`docs/simulation_overview.md`](docs/simulation_overview.md)。
 
-基础追踪法。追踪机始终朝目标当前位置飞行：先计算“追踪机到目标”的方向，再给出沿该方向的期望速度，最后用加速度去追踪这个期望速度。
+## 输出文件
 
-优点是直观、稳定、容易理解；缺点是不会预测目标未来位置。目标横向移动时，它会一直追着目标当前位置跑，轨迹可能更弯，拦截效率较低。
+每个场景目录包含以下文件：
 
-### 3D PN
+| 文件 | 内容 | 用途 |
+|------|------|------|
+| `trajectory_3d.png` | 三维轨迹对比（黑色虚线=目标，彩色=各算法追踪机） | 观察路径形状与接近效果 |
+| `trajectory_xy.png` | 水平面俯视图 | 观察横向拦截效果 |
+| `trajectory_xz.png` | 侧视图 | 检查高度响应与限制 |
+| `distance_error.png` | 距离误差曲线 + 捕获半径线 | 判断捕获时间与收敛速度 |
+| `fov_visibility.png` | LOS 夹角与可见性 0/1 状态 | 查看 FOV 丢失时段 |
+| `acceleration.png` | 控制加速度模长曲线 | 比较控制强度与剧烈程度 |
+| `metrics.png` | 指标柱状图（各指标独立小图） | 多算法一目了然对比 |
+| `metrics.csv` | 结构化指标表 | 论文表格 / 进一步分析 |
+| `replay.mcap` | Foxglove 时间线回放（需 `--export-mcap`） | 交互式 3D 动画回放 |
 
-三维比例导引。PN 会利用相对位置、相对速度和视线角速度来生成加速度，让追踪机更像是在“拦截”目标，而不是单纯追目标当前位置。
+指标字段：`capture_time`、`min_distance`、`mean_distance`、`path_length`、`control_energy`、`lost_duration`、`visible_ratio`、`yaw_rate_mean`、`yaw_rate_variance`。
 
-相比 Direct pursuit，PN 对移动目标通常更有效，尤其是目标存在横向速度时，轨迹会更直接。当前实现还加入了径向闭合项，避免初始相对速度较小时接近过慢。
-
-### PN + FOV
-
-在 PN 基础上加入视场约束。追踪机有 yaw/pitch 表示机头或相机朝向，目标方向与机头前向的夹角小于半视场角时才认为目标可见。
-
-当目标可见时，算法使用真实目标状态进行 PN 导引；当目标离开视场时，算法只使用最后一次看到的目标位置和速度做短时匀速预测，并降低导引强度。这会产生更接近视觉追踪的行为，例如目标快速横穿或近距离绕飞时可能丢失。
-
-### PN + FOV + CBF
-
-在 PN + FOV 基础上加入控制屏障函数（Control Barrier Function, CBF）风格的安全滤波器。它不完全替代 PN，而是在目标接近 FOV 边界时加入侧向修正，并在必要时混入速度匹配项，降低近距离飞越后目标被甩出视场的概率。
-
-当前实现是适配本项目质点模型的轻量近似，不引入二次规划求解器。它更像一个在线安全修正层：如果一步预测发现修正反而让 LOS/FOV 更差，就回退到原 PN + FOV 控制。
-
-### PN + FOV + MPPI
-
-在 PN + FOV 基础上加入 MPPI（Model Predictive Path Integral）采样式预测控制。它以 PN 加速度为名义控制序列，在预测窗口内随机采样多条加速度序列，批量前向仿真后根据代价的指数权重对第一步控制做加权平均。
-
-代价函数复用 NMPC 的目标：最终距离、窗口内路径距离、FOV 违反、控制能量、平滑性和偏离 PN 趋势。为了保持可复现性，MPPI 随机数由 `GuidanceConfig.mppi_seed` 固定；为了避免全场景仿真过慢，滚动预测使用 NumPy 批量计算。
-
-当前参数下，MPPI 通常能显著降低 FOV 丢失时间，同时保持较快捕获，但代价是计算量高于 PN/CBF。
-
-### PN + FOV + NMPC
-
-在 PN + FOV 基础上加入轻量级预测外环。这里的 NMPC 不依赖 CasADi/acados 等重型求解器，而是使用 shooting-based candidate optimization：
-
-1. 以 PN 加速度为趋势方向。
-2. 构造一组候选加速度，例如更大/更小 PN 增益、混入直接接近目标的控制、匹配目标速度、向 LOS 垂直方向轻微绕行。
-3. 对每个候选在短预测窗口内前向仿真。
-4. 用距离、FOV 违反、控制能量、平滑性、偏离 PN 趋势等代价评分。
-5. 选择代价最低的候选，只执行第一步，下一帧重新滚动优化。
-
-它的目标不是绝对最快捕获，而是在追踪目标的同时尽量减少 FOV 丢失。当前参数下，NMPC 往往更保守，可能牺牲一些捕获速度来换取更好的视场保持。
-
-## 输出目录
-
-运行后默认生成：
-
-```text
-outputs/
-  stationary/
-  linear/
-  circle/
-```
-
-每个场景目录包含以下文件。
-
-### `replay.mcap`
-
-可选输出文件，仅在运行时传入 `--export-mcap` 生成。它包含 Foxglove 可读取的 3D 场景和各算法 telemetry，用于时间线动画回放和交互式算法选择。
-
-### `trajectory_3d.png`
-
-三维轨迹对比图。黑色虚线是目标轨迹，其余曲线是各算法下追踪机轨迹。图中可以观察：
-
-- 追踪机是否成功接近目标
-- 路径是否绕远
-- PN 是否比基础追踪更直接
-- FOV/CBF/NMPC/MPPI 是否为了保持视场产生不同机动
-
-### `trajectory_xy.png`
-
-水平面俯视图，只看 x-y 平面运动。它适合观察横向拦截效果，尤其是 `linear` 和 `circle` 场景中，能更清楚地看到算法是否提前切入目标运动方向。
-
-### `trajectory_xz.png`
-
-侧视图，只看 x-z 平面运动。它用于检查高度响应，例如追踪机是否合理爬升/下降，以及是否触碰 `z_min`、`z_max` 高度限制。
-
-### `distance_error.png`
-
-距离误差曲线，纵轴是追踪机和目标之间的距离。虚线 `Capture radius` 是捕获半径；曲线第一次低于该线的时间就是 `capture_time`。
-
-读图时重点看：
-
-- 曲线下降速度：越快说明收敛越快
-- 最小距离：越小说明越接近目标
-- 后续是否再次增大：可能表示飞过目标或追踪不稳定
-
-### `fov_visibility.png`
-
-FOV 可见性图。上半部分是 LOS 夹角，下半部分是 `visible` 的 0/1 状态。
-
-读图方式：
-
-- LOS 夹角低于 FOV 半角时，目标在视场内
-- LOS 夹角高于 FOV 半角时，FOV 算法认为目标丢失
-- `visible = 0` 的时间越长，`lost_duration` 越大
-
-对于没有 FOV 约束的 `Direct pursuit` 和 `3D PN`，结果按理想传感器处理，目标始终可用于导引。
-
-### `acceleration.png`
-
-控制加速度模长曲线。它展示每种算法需要多强的控制输入。
-
-读图时可以关注：
-
-- 峰值是否接近加速度上限
-- 控制是否频繁剧烈变化
-- CBF/NMPC/MPPI 是否因为视场、控制和平滑代价而更保守
-
-### `metrics.png`
-
-指标柱状图，汇总各算法在同一场景下的表现。由于不同指标量纲不同，每个指标单独一个小图。
-
-### `metrics.csv`
-
-指标表，适合后续做论文表格或进一步分析。字段含义：
-
-- `capture_time`：第一次进入捕获半径的时间；未捕获则记为仿真总时长
-- `min_distance`：整个仿真中的最小距离
-- `mean_distance`：平均距离误差
-- `path_length`：追踪机轨迹长度
-- `control_energy`：控制能量近似值 `sum(||a_cmd||^2 * dt)`
-- `lost_duration`：目标不在视场内的累计时间
-- `visible_ratio`：目标可见时间占总时间比例
-- `yaw_rate_mean`：平均 yaw 角速度
-- `yaw_rate_variance`：yaw 角速度方差
+> **📖 读图与分析方法**：每张图的详细读法、指标含义以及如何从中提取结论，见 [`docs/simulation_overview.md`](docs/simulation_overview.md)。
 
 ## Foxglove 回放
 
@@ -218,16 +112,67 @@ uv run python main.py --scenario circle --sim-time 5 --save-dir outputs_verify/c
 
 `src/gazebosimulation` 是 ROS2/PX4/Gazebo 双机追踪接入包。该包只发布 PX4 Offboard setpoint 并计算导引，不启动 Gazebo、PX4 SITL、Micro XRCE-DDS Agent、QGC，也不创建 Gazebo 机体模型。
 
-### 手动启动边界
+### 启动流程
 
-先人工完成：
+按以下顺序逐个终端执行：
 
-- 启动 Gazebo 仿真世界。
-- 在 Gazebo 中创建两架 PX4 vehicle。
-- 启动对应 PX4 SITL 实例。
-- 启动 Micro XRCE-DDS Agent，确保 `px4_msgs` 话题桥接到 ROS 2。
-- 连接 QGC 并确认两架机状态正常。
-- 再启动本 ROS 2 节点。
+**1. 打开 QGroundControl**
+
+启动 QGC 桌面应用，用于监控两架飞行器状态。
+
+**2. 启动 Micro XRCE-DDS Agent**
+
+```bash
+MicroXRCEAgent udp4 -p 8888
+```
+
+**3. 启动追踪机 PX4 SITL（namespace `/px4_1`）**
+
+```bash
+cd ~/PX4-Autopilot
+PX4_SYS_AUTOSTART=4001 \
+PX4_SIM_MODEL=gz_x500 \
+PX4_GZ_MODEL_POSE="0,0,0,0,0,0" \
+PX4_UXRCE_DDS_NS=px4_1 \
+./build/px4_sitl_default/bin/px4 -i 0
+```
+
+**4. 启动目标机 PX4 SITL（namespace `/px4_2`）**
+
+```bash
+PX4_GZ_STANDALONE=1 \
+PX4_SYS_AUTOSTART=4001 \
+PX4_SIM_MODEL=gz_x500 \
+PX4_GZ_MODEL_POSE="0,5,0,0,0,0" \
+PX4_UXRCE_DDS_NS=px4_2 \
+./build/px4_sitl_default/bin/px4 -i 1
+```
+
+**5. 构建并启动导引节点**
+
+```bash
+cd 6_Simulation
+source install/setup.bash
+
+ros2 launch gazebosimulation guidance.launch.py \
+  algorithm:=pn_fov_nmpc \
+  scenario:=circle \
+  control_rate_hz:=20.0 \
+  pursuer_namespace:=/px4_1 \
+  target_namespace:=/px4_2 \
+  target_teleport_enabled:=true \
+  target_gazebo_world:=default \
+  target_gazebo_model:=x500_1 \
+  auto_arm:=true \
+  auto_offboard:=true \
+  offboard_warmup_cycles:=20 \
+  record_data:=true \
+  record_output_dir:=outputs/gazebo
+```
+
+> `PX4_GZ_MODEL_POSE="0,5,0,0,0,0"` 仅作为目标机的临时初始位姿。导引开始前节点会调用 Gazebo 的 `/world/<world>/set_pose` 将目标机瞬移到轨迹起点，因此初始位姿无需精确匹配。如果目标机 Gazebo 模型名不是 `x500_1`，用 `target_gazebo_model:=<实际模型名>` 覆盖。
+
+### 边界说明
 
 默认约定：
 
@@ -235,7 +180,7 @@ uv run python main.py --scenario circle --sim-time 5 --save-dir outputs_verify/c
 - `/px4_2` 是目标机。
 - namespace、算法、场景和控制频率都可通过 launch 参数覆盖。
 
-### 构建与启动
+### 构建
 
 从 `6_Simulation` 目录构建：
 
@@ -247,28 +192,23 @@ colcon build --base-paths src --packages-up-to gazebosimulation --cmake-clean-ca
 colcon build --base-paths src --packages-select gazebosimulation
 ```
 
-加载工作空间后启动：
+### 所有 launch 参数
 
-```bash
-source install/setup.bash
-ros2 launch gazebosimulation guidance.launch.py algorithm:=pn_fov_mppi scenario:=circle
-```
-
-常用覆盖参数：
-
-```bash
-ros2 launch gazebosimulation guidance.launch.py \
-  algorithm:=pn_fov_mppi \
-  scenario:=circle \
-  control_rate_hz:=20.0 \
-  pursuer_namespace:=/px4_1 \
-  target_namespace:=/px4_2 \
-  auto_arm:=true \
-  auto_offboard:=true \
-  offboard_warmup_cycles:=20 \
-  record_data:=true \
-  record_output_dir:=outputs/gazebo
-```
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `algorithm` | `pn_fov_mppi` | 导引算法：`basic`、`pn`、`pn_fov`、`pn_fov_cbf`、`pn_fov_mppi`、`pn_fov_nmpc` |
+| `scenario` | `circle` | 目标场景：`stationary`、`linear`、`circle` |
+| `control_rate_hz` | `20.0` | 控制循环频率 |
+| `pursuer_namespace` | `/px4_1` | 追踪机 namespace |
+| `target_namespace` | `/px4_2` | 目标机 namespace |
+| `target_teleport_enabled` | `true` | 导引开始前将目标机瞬移到轨迹起点 |
+| `target_gazebo_world` | `default` | Gazebo 世界名称（用于 set_pose） |
+| `target_gazebo_model` | `x500_1` | 目标机 Gazebo 模型名 |
+| `auto_arm` | `true` | 自动发送解锁命令 |
+| `auto_offboard` | `true` | 自动请求 Offboard 模式 |
+| `offboard_warmup_cycles` | `20` | Offboard 预热周期数 |
+| `record_data` | `true` | 退出时保存 CSV 数据 |
+| `record_output_dir` | `outputs/gazebo` | CSV 输出根目录 |
 
 ### Gazebo 数据记录与绘图
 
