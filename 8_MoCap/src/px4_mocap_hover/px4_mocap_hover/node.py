@@ -31,10 +31,21 @@ from px4_mocap_hover.stability import PositionStabilityMonitor
 
 
 class MocapHoverNode(Node):
-    """Consume bridged motion-capture odometry and execute a guarded mission."""
+    """Consume bridged mocap odometry and execute a guarded mission."""
+
+    NODE_NAME = 'px4_mocap_hover'
+    DEFAULT_TAKEOFF_HEIGHT = 1.0
+    DEFAULT_HOVER_DURATION = 10.0
+    DEFAULT_CONTROL_RATE = 10.0
+    ABORTED_STATE = MissionState.ABORTED
+    STATE_LOG_NAME = 'Mission'
+    STARTUP_WARNING = (
+        'Automatic flight enabled. Consuming bridged NED position from '
+        '{mocap_topic}; verify bridge axes before flying with propellers.'
+    )
 
     def __init__(self) -> None:
-        super().__init__('px4_mocap_hover')
+        super().__init__(self.NODE_NAME)
         self._declare_parameters()
 
         self.mocap_topic = self.get_parameter('mocap_topic').value
@@ -56,7 +67,8 @@ class MocapHoverNode(Node):
         if self.mocap_timeout <= 0.0:
             raise ValueError('mocap_timeout must be greater than zero')
         if self.local_position_timeout <= 0.0:
-            raise ValueError('local_position_timeout must be greater than zero')
+            raise ValueError(
+                'local_position_timeout must be greater than zero')
         if self.required_mocap_samples < 1:
             raise ValueError('required_mocap_samples must be at least one')
         self.position_stability = PositionStabilityMonitor(
@@ -64,18 +76,8 @@ class MocapHoverNode(Node):
             prearm_position_tolerance,
         )
 
-        config = MissionConfig(
-            takeoff_height=float(self.get_parameter('takeoff_height').value),
-            hover_duration=float(self.get_parameter('hover_duration').value),
-            position_tolerance=float(
-                self.get_parameter('position_tolerance').value),
-            stable_duration=float(self.get_parameter('stable_duration').value),
-            prestream_duration=float(
-                self.get_parameter('prestream_duration').value),
-            command_retry_interval=float(
-                self.get_parameter('command_retry_interval').value),
-        )
-        self.mission = HoverMission(config)
+        self.mission = self._create_mission()
+        self._validate_mission()
 
         self.ned_mocap: Optional[Tuple[float, float, float]] = None
         self.last_mocap_at: Optional[float] = None
@@ -112,21 +114,39 @@ class MocapHoverNode(Node):
             VehicleCommandAck, '/fmu/out/vehicle_command_ack',
             self._command_ack_callback, px4_qos)
 
-        self.control_timer = self.create_timer(1.0 / control_rate, self._control)
+        self.control_timer = self.create_timer(
+            1.0 / control_rate, self._control)
         self.log_timer = self.create_timer(1.0 / log_rate, self._log_status)
         self.get_logger().warning(
-            f'Automatic flight enabled. Consuming bridged NED position from '
-            f'{self.mocap_topic}; verify bridge axes before flying with '
-            'propellers.')
+            self.STARTUP_WARNING.format(mocap_topic=self.mocap_topic))
+
+    def _create_mission(self) -> HoverMission:
+        config = MissionConfig(
+            takeoff_height=float(self.get_parameter('takeoff_height').value),
+            hover_duration=float(self.get_parameter('hover_duration').value),
+            position_tolerance=float(
+                self.get_parameter('position_tolerance').value),
+            stable_duration=float(self.get_parameter('stable_duration').value),
+            prestream_duration=float(
+                self.get_parameter('prestream_duration').value),
+            command_retry_interval=float(
+                self.get_parameter('command_retry_interval').value),
+        )
+        return HoverMission(config)
+
+    def _validate_mission(self) -> None:
+        """Allow specialized missions to validate additional parameters."""
 
     def _declare_parameters(self) -> None:
         self.declare_parameter(
             'mocap_topic', '/fmu/in/vehicle_visual_odometry')
-        self.declare_parameter('takeoff_height', 1.0)
-        self.declare_parameter('hover_duration', 10.0)
+        self.declare_parameter(
+            'takeoff_height', self.DEFAULT_TAKEOFF_HEIGHT)
+        self.declare_parameter(
+            'hover_duration', self.DEFAULT_HOVER_DURATION)
         self.declare_parameter('mocap_timeout', 0.5)
         self.declare_parameter('local_position_timeout', 0.5)
-        self.declare_parameter('control_rate', 10.0)
+        self.declare_parameter('control_rate', self.DEFAULT_CONTROL_RATE)
         self.declare_parameter('log_rate', 1.0)
         self.declare_parameter('prearm_stable_duration', 10.0)
         self.declare_parameter('prearm_position_tolerance', 0.15)
@@ -152,7 +172,8 @@ class MocapHoverNode(Node):
             self.valid_mocap_samples = 0
             self.position_stability.reset()
             self.get_logger().error(
-                'Rejected bridged motion-capture position: expected finite NED')
+                'Rejected bridged motion-capture position: '
+                'expected finite NED')
             return
 
         if (
@@ -215,7 +236,9 @@ class MocapHoverNode(Node):
         data = MissionInput(
             now=now,
             mocap_fresh=mocap_fresh,
-            mocap_stable=self.valid_mocap_samples >= self.required_mocap_samples,
+            mocap_stable=(
+                self.valid_mocap_samples >= self.required_mocap_samples
+            ),
             position_stable=(
                 local_valid and self.position_stability.is_stable(now)
             ),
@@ -258,7 +281,8 @@ class MocapHoverNode(Node):
         return (
             self.local_position is not None
             and self.last_local_position_at is not None
-            and now - self.last_local_position_at <= self.local_position_timeout
+            and now - self.last_local_position_at
+            <= self.local_position_timeout
             and self._local_message_valid(self.local_position)
         )
 
@@ -347,10 +371,10 @@ class MocapHoverNode(Node):
             return
         detail = (
             f': {self.mission.abort_reason}'
-            if self.mission.state == MissionState.ABORTED else ''
+            if self.mission.state == self.ABORTED_STATE else ''
         )
         self.get_logger().warning(
-            f'Mission state {self.last_state.name} -> '
+            f'{self.STATE_LOG_NAME} state {self.last_state.name} -> '
             f'{self.mission.state.name}{detail}')
         self.last_state = self.mission.state
 
@@ -365,7 +389,8 @@ class MocapHoverNode(Node):
         self.get_logger().info(
             f'state={self.mission.state.name} mocap_ned={self.ned_mocap} '
             f'px4_ned={self._local_tuple()} target={self.mission.target} '
-            f'prearm_stable_for={self.position_stability.stable_for(now):.1f}s '
+            f'prearm_stable_for='
+            f'{self.position_stability.stable_for(now):.1f}s '
             f'nav_state={nav_state} armed={armed}')
 
     def _shutdown(self) -> None:
