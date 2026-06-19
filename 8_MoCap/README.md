@@ -6,10 +6,15 @@
 
 `src/px4_mocap_hover` 是该模块唯一的 ROS 2 Python 包。它将 VRPN 发布的 `geometry_msgs/PoseStamped` 动捕位姿转换为 PX4 1.15.4 使用的 NED 坐标约定，并通过 Offboard 模式自动执行起飞、悬停和降落任务。
 
-转换和任务控制分别由两个节点完成：
+转换和任务控制分别由以下节点完成：
 
 - **`mocap_bridge`**：只将动捕位姿转换后发布给 PX4，不切换飞行模式、不解锁、不发送控制设定值。
 - **`mocap_hover`**：主任务节点，订阅 `mocap_bridge` 输出的 `VehicleOdometry`，检查动捕数据是否连续有效；目标点生成和到达判断使用 PX4 融合后的 `VehicleLocalPosition`。
+- **`mocap_circle`**：起飞悬停后以悬停点为最东端逆时针飞行一圈后自动降落。
+- **`mocap_tracker`**：自动起飞并在固定高度使用速度设定值水平追踪目标机（`RigidBody_002`）。
+- **`mocap_trajectory_recorder`**：将目标机绝对 NED 轨迹逐帧记录到 CSV 文件。
+- **`mocap_trajectory_replay`**：以固定高度和 60 Hz 回放 CSV 中记录的绝对 NED 水平轨迹。
+- **`mocap_arm_test`**：仅测试解锁，不切换 Offboard，默认 3 秒后自动上锁。
 
 > 该节点忽略动捕姿态，固定发布 PX4 单位四元数 `(w, x, y, z) = (1, 0, 0, 0)`。PX4 必须配置为只融合外部位置，不得融合该节点发布的姿态或航向。
 
@@ -89,6 +94,18 @@ ros2 launch px4_mocap_hover mocap_bridge.launch.py
 # 自动切入 Offboard，解锁、起飞、悬停并降落
 ros2 launch px4_mocap_hover mocap_hover.launch.py
 
+# 起飞悬停 3 秒，以悬停点为最东端逆时针飞一圈后降落
+ros2 launch px4_mocap_hover mocap_circle.launch.py
+
+# 自动起飞并在固定高度水平追踪目标机
+ros2 launch px4_mocap_hover mocap_tracker.launch.py
+
+# 将目标机绝对 NED 轨迹逐帧记录到 CSV
+ros2 launch px4_mocap_hover mocap_trajectory_recorder.launch.py
+
+# 以固定高度和 60 Hz 逐行回放绝对 NED CSV 水平轨迹
+ros2 launch px4_mocap_hover mocap_trajectory_replay.launch.py
+
 # 仅测试解锁，默认解锁 3 秒后自动上锁；测试前仍须拆除螺旋桨
 ros2 launch px4_mocap_hover mocap_arm_test.launch.py
 ```
@@ -99,6 +116,10 @@ ros2 launch px4_mocap_hover mocap_arm_test.launch.py
 # 检查 VRPN 原始位姿及更新频率
 ros2 topic echo --once /vrpn_mocap/RigidBody/pose
 ros2 topic hz /vrpn_mocap/RigidBody/pose
+
+# 检查目标机 VRPN 位姿及更新频率
+ros2 topic echo --once /vrpn_mocap/RigidBody_002/pose
+ros2 topic hz /vrpn_mocap/RigidBody_002/pose
 
 # 检查中转后的 NED 动捕数据及更新频率
 ros2 topic echo --once /fmu/in/vehicle_visual_odometry
@@ -116,11 +137,19 @@ ros2 topic echo /fmu/out/vehicle_command_ack
 # 查看节点连接关系
 ros2 node info /px4_mocap_bridge
 ros2 node info /px4_mocap_hover
+ros2 node info /px4_mocap_circle
+ros2 node info /px4_mocap_tracker
+ros2 node info /mocap_trajectory_recorder
+ros2 node info /px4_mocap_trajectory_replay
 ros2 node info /px4_mocap_arm_test
 
 # 查看节点参数（只对当前正在运行的节点执行）
 ros2 param list /px4_mocap_bridge
 ros2 param list /px4_mocap_hover
+ros2 param list /px4_mocap_circle
+ros2 param list /px4_mocap_tracker
+ros2 param list /mocap_trajectory_recorder
+ros2 param list /px4_mocap_trajectory_replay
 ros2 param list /px4_mocap_arm_test
 ros2 param get /px4_mocap_hover takeoff_height
 ```
@@ -239,3 +268,179 @@ ros2 run px4_mocap_hover mocap_hover --ros-args \
 | `required_mocap_samples` | `20` | 开始任务前要求的连续有效动捕帧数 |
 
 主节点日志会输出任务状态变化、已发送命令、PX4 命令确认、中转节点输出的 NED 动捕位置、PX4 当前 NED 位置以及当前目标点。
+
+## 圆轨迹任务
+
+保持 `mocap_bridge` 运行后启动：
+
+```bash
+ros2 launch px4_mocap_hover mocap_circle.launch.py
+```
+
+该节点复用悬停任务的动捕稳定检查、Offboard 切换、解锁和降落保护。默认相对起飞
+`1.0 m`，到达目标并稳定后悬停 `3.0 s`。悬停点作为圆的最东端，圆心位于其西侧
+`0.5 m`；飞行器从该点先向北运动，以俯视逆时针方向在 `10.0 s` 内完成一圈，同时保持
+起飞时航向和高度。轨迹结束后节点发送 PX4 `NAV_LAND` 命令，并等待 PX4 自动上锁后退出。
+
+圆轨迹参数可通过命令行覆盖：
+
+```bash
+ros2 run px4_mocap_hover mocap_circle --ros-args \
+  -p takeoff_height:=1.0 \
+  -p hover_duration:=3.0 \
+  -p circle_radius:=0.5 \
+  -p circle_duration:=10.0
+```
+
+其中 `circle_radius` 单位为米，`circle_duration` 单位为秒。飞行区域应至少为起飞点西侧
+`1.0 m`、南北两侧各 `0.5 m` 的圆形轨迹预留额外安全空间。
+
+## 水平追踪任务
+
+启动追踪任务前，先保持现有追踪机动捕桥接节点运行：
+
+```bash
+ros2 launch px4_mocap_hover mocap_bridge.launch.py
+```
+
+确认追踪机 `RigidBody` 和目标机 `RigidBody_002` 的身份、更新频率和坐标方向正确后，
+在另一个已加载工作空间环境的终端启动：
+
+```bash
+ros2 launch px4_mocap_hover mocap_tracker.launch.py
+```
+
+默认流程如下：
+
+1. 只等待追踪机自身动捕、PX4 本地位置和解锁前检查满足要求，不要求目标机预先可见。
+2. 记录追踪机当前 PX4 本地位置和航向，使用位置设定值自动切入 Offboard、解锁并向上
+   起飞 1.2 m。
+3. 到达起飞目标并稳定后切换为 NED 速度控制；目标不可见时发送零水平速度并通过垂直
+   速度闭环保持起飞高度。
+4. 目标动捕连续有效 5 帧后，根据两个刚体在同一动捕世界坐标系中的 NED 水平位置误差
+   生成速度指令。目标高度和姿态均不参与控制，追踪机保持起飞时航向。
+5. 目标超过 0.5 s 未更新时，按最大水平加速度限制将速度平滑减至零；目标重新连续有效
+   5 帧后继续追踪。
+
+追踪节点不会自动降落，也不会在人工切出 Offboard 后重新接管。结束任务时应先使用遥控器
+切换到已验证可用的人工模式，确认 PX4 已离开 Offboard，再停止节点。直接停止节点会触发
+PX4 的 Offboard-loss 行为，其结果取决于 `COM_OF_LOSS_T`、`COM_OBL_RC_ACT` 等参数。
+自身动捕或 PX4 本地位置失效时，节点同样停止 Offboard 输出并交由 PX4 failsafe 处理。
+
+### 主要追踪参数
+
+| 参数 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `self_odometry_topic` | `/fmu/in/vehicle_visual_odometry` | 追踪机桥接后的 NED 动捕里程计 |
+| `target_mocap_topic` | `/vrpn_mocap/RigidBody_002/pose` | 目标机原始 VRPN 位姿 |
+| `takeoff_height` | `1.2` | 相对起点向上起飞并保持的高度，单位为米 |
+| `target_mocap_timeout` | `0.5` | 目标机动捕超时阈值，单位为秒 |
+| `target_reacquire_samples` | `5` | 目标恢复后重新追踪所需的连续有效帧数 |
+| `xy_kp` | `0.8` | 水平位置误差到速度的比例增益 |
+| `xy_deadband` | `0.10` | 水平误差死区半径，单位为米 |
+| `max_xy_speed` | `0.5` | 最大水平合速度，单位为 m/s |
+| `max_xy_acceleration` | `0.5` | 水平速度指令最大变化率，单位为 m/s² |
+| `z_kp` | `1.0` | 定高垂直速度比例增益 |
+| `max_z_speed` | `0.3` | 最大垂直速度绝对值，单位为 m/s |
+
+其他解锁前稳定性、控制频率、超时和命令重试参数与 `mocap_hover` 含义一致。例如：
+
+```bash
+ros2 run px4_mocap_hover mocap_tracker --ros-args \
+  -p target_mocap_topic:=/vrpn_mocap/RigidBody_002/pose \
+  -p takeoff_height:=1.2 \
+  -p max_xy_speed:=0.5
+```
+
+首次联调必须拆除螺旋桨，分别验证坐标转换、目标身份、速度方向、目标丢失悬停和遥控接管；
+装桨测试时还必须为两机保留足够的垂直隔离和水平安全空间。默认 XY 完全重合控制并不提供
+避碰能力。
+
+## 目标机轨迹记录
+
+轨迹记录节点独立订阅目标机原始 VRPN 位姿，不控制飞行器，也不要求 PX4 或桥接节点运行：
+
+```bash
+ros2 launch px4_mocap_hover mocap_trajectory_recorder.launch.py
+```
+
+节点收到第一帧有效位姿时才创建 CSV，并将该帧的 `elapsed_s` 记为 `0`。随后逐帧使用
+节点接收时的 ROS 时钟记录数据，按 `(x, y, z) -> (x, z, -y)` 转换为场地绝对 NED
+坐标。CSV 列为：
+
+```text
+elapsed_s,ros_time_ns,north_m,east_m,down_m
+```
+
+默认文件名为
+`/home/nvidia/ws_ros2/trajectory_csv/target_trajectory_YYYYMMDD_HHMMSS.csv`。若同名文件已经存在，
+节点会添加数字后缀，绝不覆盖已有记录。每帧写入后立即刷新；使用 `Ctrl-C` 停止节点并
+关闭文件。若整个运行期间没有有效样本，则不会创建空 CSV。
+
+可通过参数修改订阅话题、输出目录和文件名前缀：
+
+```bash
+ros2 run px4_mocap_hover mocap_trajectory_recorder --ros-args \
+  -p mocap_topic:=/vrpn_mocap/RigidBody_002/pose \
+  -p output_directory:=/home/nvidia/ws_ros2/trajectory_csv \
+  -p file_prefix:=target_trajectory
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `mocap_topic` | `/vrpn_mocap/RigidBody_002/pose` | 目标机原始 VRPN 位姿 |
+| `output_directory` | `/home/nvidia/ws_ros2/trajectory_csv` | CSV 输出目录 |
+| `file_prefix` | `target_trajectory` | CSV 文件名前缀 |
+
+## CSV 绝对 NED 轨迹回放
+
+回放前必须确认 PX4 `VehicleLocalPosition` 的水平 NED 原点与 CSV 使用的场地绝对 NED
+原点一致。保持追踪机自身的 `mocap_bridge` 运行后启动：
+
+```bash
+ros2 launch px4_mocap_hover mocap_trajectory_replay.launch.py
+```
+
+执行命令后，launch 会在当前终端明确询问要回放的 CSV 文件路径：
+
+```text
+请输入要回放的 CSV 文件路径，然后按 Enter：
+> /home/nvidia/ws_ros2/trajectory_csv/target_trajectory_20260619_163716.csv
+```
+
+launch 不提供默认 CSV；空路径或不存在的文件会要求重新输入。获得有效路径后，节点会
+一次性加载并验证整个 CSV。表头不匹配、没有数据行、列数错误或包含非法数值时，节点直接
+启动失败，不会切换模式、解锁或发布飞行设定值。
+
+默认任务先原地垂直起飞至相对起点 `1.2 m`，稳定后悬停 `3.0 s`，再以固定高度飞至 CSV
+首行的绝对 `north_m/east_m` 并稳定 `1.0 s`。随后控制循环以 `60 Hz` 每周期严格推进
+一行，不使用 `elapsed_s` 调度、不插值、不跳点。CSV 的 `down_m` 仅参与文件有效性检查；
+实际高度始终固定为起飞前 PX4 本地 `z - 1.2 m`，航向保持为起飞前航向。全部行发送后
+节点执行 `NAV_LAND`，等待 PX4 自动上锁后退出。
+
+例如 `target_trajectory_20260619_163716.csv` 包含 4458 个坐标点，60 Hz 回放约需
+`74.3 s`，轨迹水平范围约为 `3.36 m × 3.02 m`。装桨前必须确认所选 CSV 的整个轨迹
+区域具有足够净空。
+
+### 主要参数
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `trajectory_file` | 无 | 要完整加载并回放的 CSV；launch 启动时交互输入 |
+| `takeoff_height` | `1.2` | 相对起点向上起飞并保持的高度，单位为米 |
+| `hover_duration` | `3.0` | 垂直起飞稳定后的悬停时间，单位为秒 |
+| `control_rate` | `60.0` | 回放和 Offboard 控制频率，单位为 Hz |
+| `position_tolerance` | `0.15` | 起飞及进入首点的位置容差，单位为米 |
+| `stable_duration` | `1.0` | 在目标容差内持续稳定的时间，单位为秒 |
+
+可通过命令行选择其他同格式轨迹：
+
+```bash
+ros2 run px4_mocap_hover mocap_trajectory_replay --ros-args \
+  -p trajectory_file:=/home/nvidia/ws_ros2/trajectory_csv/target_trajectory.csv \
+  -p control_rate:=60.0
+```
+
+飞行中若自身动捕超时、PX4 本地位置失效、飞行器意外离开 Offboard 或意外上锁，节点会
+停止 Offboard 输出并交由 PX4 failsafe 处理。必须预先验证
+`COM_OF_LOSS_T`、`COM_OBL_RC_ACT` 等参数和人工接管方式。
