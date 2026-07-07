@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1080" width="900" height="1080">
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 Z" fill="#3b82f6"/>
+  </marker>
+  <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 Z" fill="#64748b"/>
+  </marker>
+  <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="2.5" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  </defs>
+  <rect width="900" height="1080" fill="#0f172a"/>
+  <text x="450.0" y="30" fill="#f1f5f9" font-size="20" font-family="Arial, sans-serif" text-anchor="middle" font-weight="bold">PN + NMPC Guidance Architecture</text>
+    <text x="450.0" y="50" fill="#94a3b8" font-size="12" font-family="Arial, sans-serif" text-anchor="middle" font-weight="normal">2D Anti-Drone Pursuit  —  定高俯瞰 比例导引 + 非线性模型预测控制</text>
+    <rect x="40" y="70" width="820" height="36" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <text x="54" y="92" fill="#94a3b8" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">simulation.py: run_algorithm(scenario, "pn_nmpc", config)    dt=0.05s    sim_time=40s</text>
+    <rect x="40" y="125" width="285" height="92" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <rect x="40" y="125" width="285" height="26" rx="6" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <rect x="42" y="145" width="281" height="6" rx="0" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <text x="48" y="143" fill="#f1f5f9" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">PursuerState</text>
+    <text x="50" y="169" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">position:  np.ndarray(3)  [x, y, z=8]</text>
+    <text x="50" y="187" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">velocity:  np.ndarray(3)  [vx, vy, 0]</text>
+    <text x="50" y="205" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">yaw:       float</text>
+    <text x="50" y="223" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">accel:     np.ndarray(3)</text>
+    <rect x="337" y="125" width="265" height="92" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <rect x="337" y="125" width="265" height="26" rx="6" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <rect x="339" y="145" width="261" height="6" rx="0" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <text x="345" y="143" fill="#f1f5f9" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">TargetState</text>
+    <text x="347" y="169" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">position:     np.ndarray(3)  [x, y, z=1]</text>
+    <text x="347" y="187" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">velocity:     np.ndarray(3)</text>
+    <text x="347" y="205" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">acceleration: np.ndarray(3)</text>
+    <rect x="614" y="125" width="210" height="92" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+    <rect x="614" y="125" width="210" height="26" rx="6" fill="#111827" stroke="#475569" stroke-width="0"/>
+    <rect x="616" y="145" width="206" height="6" rx="0" fill="#111827" stroke="#475569" stroke-width="0"/>
+    <text x="622" y="143" fill="#f1f5f9" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">GuidanceMemory</text>
+    <text x="624" y="169" fill="#cbd5e1" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">previous_accel: ndarray(3)</text>
+    <text x="624" y="187" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">  ↑ 上一步实际加速度</text>
+    <text x="624" y="210" fill="#64748b" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">用途: 平滑代价项 ‖a−a_prev‖²</text>
+    <rect x="40" y="240" width="820" height="48" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <rect x="40" y="240" width="820" height="26" rx="6" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <rect x="42" y="260" width="816" height="6" rx="0" fill="#111827" stroke="#334155" stroke-width="0"/>
+    <text x="48" y="258" fill="#f1f5f9" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">compute_guidance(algorithm="pn_nmpc", pursuer, target, memory, config, dt)</text>
+    <line x1="182.5" y1="217" x2="450.0" y2="240" stroke="#64748b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+    <line x1="469.5" y1="217" x2="450.0" y2="240" stroke="#64748b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+    <line x1="719.0" y1="217" x2="450.0" y2="240" stroke="#64748b" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-gray)"/>
+    <line x1="450.0" y1="288" x2="450.0" y2="315" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+    <text x="460.0" y="328" fill="#3b82f6" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">pn_trend = pn_guidance()</text>
+    <rect x="35" y="315" width="830" height="200" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+    <rect x="35" y="315" width="830" height="26" rx="6" fill="#052e16" stroke="#22c55e" stroke-width="0"/>
+    <rect x="37" y="335" width="826" height="6" rx="0" fill="#052e16" stroke="#22c55e" stroke-width="0"/>
+    <text x="43" y="333" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">Step 1</text>
+    <text x="45" y="333" fill="#bbf7d0" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold"></text>
+    <text x="48" y="335" fill="#bbf7d0" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">pn_guidance(pursuer, target, config)</text>
+    <text x="54" y="357" fill="#bbf7d0" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">r = target.position − pursuer.position     ← 视线向量</text>
+    <text x="54" y="377" fill="#bbf7d0" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">u_LOS = normalize(r)                      ← 单位视线方向</text>
+    <text x="54" y="397" fill="#bbf7d0" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">v_rel = target.velocity − pursuer.velocity                          closing_speed = max(0, −v_rel·u_LOS)</text>
+    <rect x="50" y="415" width="380" height="52" rx="4" fill="#0a2815" stroke="#4ade80" stroke-width="1.5"/>
+    <text x="60" y="435" fill="#fbbf24" font-size="14" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">ω_LOS = (r × v_rel)_z  /  |r|²</text>
+    <text x="60" y="453" fill="#86efac" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">2D 视线角速率 (标量):  (r_x · v_y − r_y · v_x) / r²</text>
+    <rect x="50" y="481" width="380" height="32" rx="4" fill="#0a2815" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="60" y="502" fill="#fbbf24" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">a_pn = N · closing_speed · ω_LOS · lateral    N=3.5    lateral=[−u_y, u_x, 0]</text>
+    <text x="54" y="529" fill="#bbf7d0" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">a_close = k_close · (v_des − v_along_los) · u_LOS    k_close=1.0, v_des=8.0</text>
+    <rect x="50" y="543" width="380" height="28" rx="4" fill="#0a2815" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="60" y="562" fill="#fbbf24" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">pn_trend = clamp(a_pn + a_close, a_max=6.0)   ← PN基线趋势</text>
+    <text x="450" y="375" fill="#bbf7d0" font-size="11" font-family="Arial, sans-serif" text-anchor="start" font-weight="normal">► PN 提供拦截方向"锚点"</text>
+    <text x="450" y="397" fill="#bbf7d0" font-size="11" font-family="Arial, sans-serif" text-anchor="start" font-weight="normal">   NMPC 将在该锚点附近</text>
+    <text x="450" y="419" fill="#bbf7d0" font-size="11" font-family="Arial, sans-serif" text-anchor="start" font-weight="normal">   搜索最优加速度指令</text>
+    <text x="450" y="447" fill="#bbf7d0" font-size="11" font-family="Arial, sans-serif" text-anchor="start" font-weight="normal">► 避免纯优化发散或</text>
+    <text x="450" y="469" fill="#bbf7d0" font-size="11" font-family="Arial, sans-serif" text-anchor="start" font-weight="normal">   产生不合理机动</text>
+    <line x1="450.0" y1="515" x2="450.0" y2="540" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+    <text x="460.0" y="533" fill="#3b82f6" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">pn_trend + memory</text>
+    <rect x="35" y="540" width="830" height="520" rx="6" fill="#0f1d3d" stroke="#3b82f6" stroke-width="2"/>
+    <rect x="35" y="540" width="830" height="26" rx="6" fill="#0b1630" stroke="#3b82f6" stroke-width="0"/>
+    <rect x="37" y="560" width="826" height="6" rx="0" fill="#0b1630" stroke="#3b82f6" stroke-width="0"/>
+    <text x="43" y="558" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">Step 2</text>
+    <text x="45" y="558" fill="#bfdbfe" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold"></text>
+    <text x="48" y="560" fill="#bfdbfe" font-size="13" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">nmpc_acceleration(pursuer, target, pn_trend, memory, config)</text>
+    <text x="54" y="584" fill="#bfdbfe" font-size="12" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">2a. _candidate_accelerations()    →    16 个候选加速度  (全部 clamp 到 a_max=6.0)</text>
+    <rect x="50" y="596" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="56" y="612" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">pn_trend</text>
+    <rect x="258" y="596" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="264" y="612" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.55 × pn_trend</text>
+    <rect x="466" y="596" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="472" y="612" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">1.25 × pn_trend</text>
+    <rect x="674" y="596" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="680" y="612" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.75×PN + 0.25×intercept</text>
+    <rect x="50" y="625" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="56" y="641" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.50×PN + 0.50×intercept</text>
+    <rect x="258" y="625" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="264" y="641" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">same_speed</text>
+    <rect x="466" y="625" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="472" y="641" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.50×PN + 0.50×same_speed</text>
+    <rect x="674" y="625" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="680" y="641" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">velocity_match</text>
+    <rect x="50" y="654" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="56" y="670" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.50×PN + 0.50×vel_match</text>
+    <rect x="258" y="654" width="200" height="25" rx="3" fill="#1e3a5f" stroke="#60a5fa" stroke-width="2"/>
+    <rect x="258" y="654" width="200" height="25" rx="3" fill="none" stroke="#60a5fa" stroke-width="2"/>
+    <rect x="258" y="654" width="200" height="25" rx="3" fill="none" stroke="#fbbf24" stroke-width="1.5" filter="url(#glow)"/>
+    <text x="264" y="670" fill="#e0f2fe" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">stable_tracking ★</text>
+    <rect x="466" y="654" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="472" y="670" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">soft_tracking</text>
+    <rect x="674" y="654" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="680" y="670" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">velocity_tracking</text>
+    <rect x="50" y="683" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="56" y="699" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.50×PN + 0.50×stable</text>
+    <rect x="258" y="683" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="264" y="699" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">0.35×PN + 0.65×soft</text>
+    <rect x="466" y="683" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="472" y="699" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">PN + 0.35·a_max·lateral</text>
+    <rect x="674" y="683" width="200" height="25" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="680" y="699" fill="#cbd5e1" font-size="9" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">PN − 0.35·a_max·lateral</text>
+    <text x="896" y="621" fill="#22c55e" font-size="10" font-family="Arial, sans-serif" text-anchor="start" font-weight="bold">PN 缩放类</text>
+    <text x="896" y="679" fill="#a78bfa" font-size="10" font-family="Arial, sans-serif" text-anchor="start" font-weight="bold">拦截混合类</text>
+    <text x="896" y="737" fill="#38bdf8" font-size="10" font-family="Arial, sans-serif" text-anchor="start" font-weight="bold">速度匹配类</text>
+    <text x="896" y="795" fill="#fbbf24" font-size="10" font-family="Arial, sans-serif" text-anchor="start" font-weight="bold">★ 末端跟踪类</text>
+    <text x="896" y="853" fill="#fb923c" font-size="10" font-family="Arial, sans-serif" text-anchor="start" font-weight="bold">横向探测类</text>
+    <text x="54" y="728" fill="#bfdbfe" font-size="12" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">2b. _rollout_cost()    H = 20 steps × mpc_dt=0.1s = 2s 前向预测</text>
+    <text x="54" y="746" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">目标: 恒加速度外推  pos_pred = pos + vel·t + 0.5·acc·t²    pursuer: step_pursuer() 动力学积分</text>
+    <rect x="54" y="764" width="340.0" height="16" rx="3" fill="#ef4444" stroke="#ef4444" stroke-width="0"/>
+    <text x="400.0" y="776" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">final_distance</text>
+    <text x="792.0" y="776" fill="#ef4444" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×12.000</text>
+    <rect x="54" y="786" width="153.0" height="16" rx="3" fill="#f97316" stroke="#f97316" stroke-width="0"/>
+    <text x="213.0" y="798" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">final_vel_error</text>
+    <text x="605.0" y="798" fill="#f97316" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×5.400</text>
+    <rect x="54" y="808" width="61.20000000000001" height="16" rx="3" fill="#eab308" stroke="#eab308" stroke-width="0"/>
+    <text x="121.20000000000002" y="820" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">steady_cost</text>
+    <text x="513.2" y="820" fill="#eab308" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×2.160</text>
+    <rect x="54" y="830" width="2.8333333333333335" height="16" rx="3" fill="#a3a3a3" stroke="#a3a3a3" stroke-width="0"/>
+    <text x="62.833333333333336" y="842" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">path_cost</text>
+    <text x="454.8333333333333" y="842" fill="#a3a3a3" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×0.100</text>
+    <rect x="54" y="852" width="2.2666666666666666" height="16" rx="3" fill="#a3a3a3" stroke="#a3a3a3" stroke-width="0"/>
+    <text x="62.266666666666666" y="864" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">smooth_cost</text>
+    <text x="454.26666666666665" y="864" fill="#a3a3a3" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×0.080</text>
+    <rect x="54" y="874" width="1.1333333333333333" height="16" rx="3" fill="#a0a0a0" stroke="#a0a0a0" stroke-width="0"/>
+    <text x="61.13333333333333" y="886" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">pn_cost (偏离PN趋势)</text>
+    <text x="453.1333333333333" y="886" fill="#a0a0a0" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×0.040</text>
+    <rect x="54" y="896" width="0.9916666666666667" height="16" rx="3" fill="#909090" stroke="#909090" stroke-width="0"/>
+    <text x="60.99166666666667" y="908" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">velocity_cost</text>
+    <text x="452.9916666666667" y="908" fill="#909090" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×0.035</text>
+    <rect x="54" y="918" width="0.425" height="16" rx="3" fill="#808080" stroke="#808080" stroke-width="0"/>
+    <text x="60.425" y="930" fill="#cbd5e1" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">control_cost |‖acc‖²</text>
+    <text x="452.425" y="930" fill="#808080" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">×0.015</text>
+    <text x="54" y="954" fill="#bfdbfe" font-size="11" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">Cost = Σ 8项加权和 → 选 min(cost) 对应的候选加速度</text>
+    <text x="64" y="976" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">steady_cost: 后半段(distance² + 0.35·|v_rel|²) → 防止末段超调振荡</text>
+    <text x="64" y="992" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">smooth_cost: ‖acc − previous_acc‖²             → 抑制加速度突变</text>
+    <text x="64" y="1008" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">pn_cost:     ‖acc − pn_trend‖²                  → 不宜过多偏离PN锚点</text>
+    <rect x="50" y="1036" width="-19.575" height="38" rx="4" fill="#1e3a5f" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="60" y="1060" fill="#e0f2fe" font-size="12" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">2c. best = argmin(cost)  among 16    →    clamp_norm_xy(best, a_max=6.0)    →    返回 GuidanceResult</text>
+    <line x1="450.0" y1="1074" x2="450.0" y2="1060" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <line x1="450.0" y1="1060" x2="450.0" y2="1064" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+    <text x="460.0" y="1054" fill="#3b82f6" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">acceleration</text>
+    <rect x="40" y="1064" width="0.425" height="50" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <text x="54" y="1082" fill="#f1f5f9" font-size="12" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="bold">step_pursuer(state, acc, target_pos, config, dt=0.05)</text>
+    <text x="54" y="1102" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">vel += acc·dt  (clamp v_max=12)    pos += vel·dt  (z locked=8)    yaw → look_at target    memory.prev_acc = new_acc</text>
+    <path d="M 610.0 1114 L 610.0 1134 L 50.425 1134 L 50.425 88" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow-gray)"/>
+    <text x="620.0" y="1130" fill="#94a3b8" font-size="10" font-family="Consolas, Monaco, 'Courier New', monospace" text-anchor="start" font-weight="normal">t += dt  ↻ 下一帧</text>
+</svg>
