@@ -260,41 +260,40 @@ MPPI 以 PN 加速度为名义控制序列，在预测窗口内采样多条带�
 
 本仿真中 NMPC 和 MPPI 的代价函数均遵循标准 NMPC 的终端代价 + 逐步代价结构：
 
-```text
-       N-1
-J = Φ(x_N) + Σ L_k(x_k, u_k, u_{k-1})
-       k=1
-```
+$$
+J = \Phi(x_N) + \sum_{k=1}^{N-1} L_k(x_k, u_k, u_{k-1})
+$$
 
-其中 `x_k = [p, v]` 为追踪机状态，`u_k = a_k` 为控制量（水平加速度），`Φ` 为终端代价，`L_k` 为逐步代价。
+其中 $x_k = [p_k, v_k]$ 为追踪机第 $k$ 步的状态，$u_k = a_k$ 为控制量（水平加速度），$\Phi$ 为终端代价，$L_k$ 为逐步代价。
 
 #### 7.3.1 各项代价的通用归类
 
 | 类型 | 符号 | 数学形式 | 范数类型 |
 |------|------|---------|---------|
-| 终端位置误差 | Φ_dist | `w₁ · ‖Δp_N‖` | L1 |
-| 终端速度误差 | Φ_vel | `α·w₁ · ‖Δv_N‖` | L2 |
-| 路径跟踪 | L_path | `w₂ · ‖Δp_k‖` | L1 |
-| 速度匹配 | L_vel | `β·w₂ · ‖Δv_k‖²·dt` | L2 |
-| 控制能量 | L_ctrl | `w₃ · ‖u_k‖²·dt` | L2 |
-| 控制平滑 | L_smooth | `w₄ · ‖u_k−u_{k-1}‖²` | L2 |
-| PN 保底 | L_ref | `w₅ · ‖u_k−u_PN‖²` | L2 |
-| 末端稳态 | L_steady | `s(k) · (‖Δp_k‖² + λ·‖Δv_k‖²)` | L2 |
+| 终端位置误差 | $\Phi_{\text{dist}}$ | $w_1 \cdot \|\Delta p_N\|$ | $L_1$ |
+| 终端速度误差 | $\Phi_{\text{vel}}$ | $\alpha w_1 \cdot \|\Delta v_N\|$ | $L_2$ |
+| 路径跟踪 | $L_{\text{path}}$ | $w_2 \cdot \|\Delta p_k\|$ | $L_1$ |
+| 速度匹配 | $L_{\text{vel}}$ | $\beta w_2 \cdot \|\Delta v_k\|^2 \Delta t$ | $L_2$ |
+| 控制能量 | $L_{\text{ctrl}}$ | $w_3 \cdot \|u_k\|^2 \Delta t$ | $L_2$ |
+| 控制平滑 | $L_{\text{smooth}}$ | $w_4 \cdot \|u_k - u_{k-1}\|^2$ | $L_2$ |
+| PN 保底 | $L_{\text{ref}}$ | $w_5 \cdot \|u_k - u_{\text{PN}}\|^2$ | $L_2$ |
+| 末端稳态 | $L_{\text{steady}}$ | $s(k) \cdot \left(\|\Delta p_k\|^2 + \lambda \|\Delta v_k\|^2\right)$ | $L_2$ |
 
-其中 `α=0.45`、`β=0.35`、`λ=0.35` 为硬编码的相对权重系数，`s(k)` 为后半预测窗口（`k > H/2`）激活的稳态开关函数。
+其中 $\alpha=0.45$、$\beta=0.35$、$\lambda=0.35$ 为硬编码的相对权重系数，$s(k)$ 为后半预测窗口（$k > H/2$）激活的稳态开关函数。
 
 #### 7.3.2 统一展开形式
 
 将各项代入，得到完整的单行代价：
 
-```text
-     H
-J =  Σ [ w_path·‖Δp_k‖ + 0.35·w_path·‖Δv_k‖²·dt + w_control·‖u_k‖²·dt + w_smooth·‖u_k−u_{k-1}‖² + w_pn·‖u_k−u_PN‖² + s(k)·(‖Δp_k‖² + 0.35·‖Δv_k‖²) ]
-    k=1
-   + w_dist·‖Δp_H‖ + 0.45·w_dist·‖Δv_H‖
-```
+$$
+\begin{aligned}
+J = &\sum_{k=1}^{H} \Big[ w_{\text{path}} \cdot \|\Delta p_k\| + \beta w_{\text{path}} \cdot \|\Delta v_k\|^2 \Delta t + w_{\text{ctrl}} \cdot \|u_k\|^2 \Delta t \\
+     &+ w_{\text{smooth}} \cdot \|u_k - u_{k-1}\|^2 + w_{\text{pn}} \cdot \|u_k - u_{\text{PN}}\|^2 + s(k) \cdot \left(\|\Delta p_k\|^2 + \lambda \|\Delta v_k\|^2\right) \Big] \\
+     &+ w_{\text{dist}} \cdot \|\Delta p_H\| + \alpha w_{\text{dist}} \cdot \|\Delta v_H\|
+\end{aligned}
+$$
 
-**范数策略**：位置误差项使用 L1 范数（对较大距离不过度惩罚，避免过度控制），速度误差和控制量使用 L2 范数（对大幅偏差施加指数级惩罚，鼓励平顺）。
+**范数策略**：位置误差项使用 $L_1$ 范数（对较大距离不过度惩罚，避免过度控制），速度误差和控制量使用 $L_2$ 范数（对大幅偏差施加平方级惩罚，鼓励平顺）。
 
 ### 7.4 NMPC 代价结构
 
@@ -309,26 +308,23 @@ NMPC 使用候选式寻优：对一组由导引几何构造的候选加速度逐
 
 MPPI 使用简化代价，不包含终端速度误差、速度匹配代价和末端稳态代价：
 
-```text
-     H
-J =  Σ [ w_path·‖Δp_k‖ + w_control·‖u_k‖²·dt + w_smooth·‖u_k−u_{k-1}‖² + w_pn·‖u_k−u_PN‖² ]
-    k=1
-   + w_dist·‖Δp_H‖
-```
+$$
+J = \sum_{k=1}^{H} \Big[ w_{\text{path}} \cdot \|\Delta p_k\| + w_{\text{ctrl}} \cdot \|u_k\|^2 \Delta t + w_{\text{smooth}} \cdot \|u_k - u_{k-1}\|^2 + w_{\text{pn}} \cdot \|u_k - u_{\text{PN}}\|^2 \Big] + w_{\text{dist}} \cdot \|\Delta p_H\|
+$$
 
 随后进行指数加权：
 
-```text
-weight_i = exp(-(J_i - min(J)) / temperature)
-a_cmd = Σ_i weight_i · a_i_first / Σ_i weight_i
-```
+$$
+\text{weight}_i = \exp\!\left(-\frac{J_i - \min(J)}{\tau}\right), \qquad
+a_{\text{cmd}} = \frac{\sum_i \text{weight}_i \cdot a_{i,\text{first}}}{\sum_i \text{weight}_i}
+$$
 
 ### 7.6 NMPC 与 MPPI 的目标预测模型差异
 
 | 特性 | NMPC (`_rollout_cost`) | MPPI (`_mppi_sequence_costs`) |
 |------|------------------------|-------------------------------|
-| 位置预测 | `p_t(t) = p_t0 + v_t0·t + ½·a_t0·t²` | `p_t(t) = p_t0 + v_t0·t` |
-| 速度预测 | `v_t(t) = v_t0 + a_t0·t` | `v_t(t) = v_t0`（恒速） |
+| 位置预测 | $p_t(t) = p_{t0} + v_{t0} \cdot t + \frac{1}{2} a_{t0} \cdot t^2$ | $p_t(t) = p_{t0} + v_{t0} \cdot t$ |
+| 速度预测 | $v_t(t) = v_{t0} + a_{t0} \cdot t$ | $v_t(t) = v_{t0}$（恒速） |
 | 加速度假设 | 常加速度（保持调用时刻的初始值） | 忽略目标加速度 |
 | 更新方式 | 每步从初始状态解析计算（非递推） | 每步从初始状态解析计算（非递推） |
 
