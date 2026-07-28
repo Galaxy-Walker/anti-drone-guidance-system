@@ -6,9 +6,9 @@
 
 仿真目标包括：
 
-- 在静止、匀速直线和圆周机动目标下比较基础追踪、PN、PN + MPPI 与 PN + NMPC；
+- 在静止、匀速直线和圆周机动目标下比较基础追踪、PN、PN + MPPI 与 PN + EMPC；
 - 验证二维 PN 是否能提供有效的名义拦截趋势；
-- 验证 MPPI/NMPC 是否能在短预测窗口内降低控制能量、改善 yaw 转向平滑性，并保持较好的捕获能力；
+- 验证 MPPI/EMPC 是否能在短预测窗口内降低控制能量、改善 yaw 转向平滑性，并保持较好的捕获能力；
 - 将纯 Python 离线仿真与 ROS2/PX4/Gazebo Offboard 接入保持同一套二维导引逻辑。
 
 性能指标包括：捕获时间、最小水平距离、平均水平距离、路径长度、控制能量、平均 yaw 角速度和 yaw 角速度方差。
@@ -27,7 +27,7 @@
 | `state.py` | 定义追踪机、目标和仿真结果数据结构 |
 | `target.py` | 生成静止、匀速直线和圆周三类二维目标轨迹 |
 | `dynamics.py` | 实现追踪机二维定高运动模型和 yaw 朝向更新 |
-| `guidance.py` | 实现 2D direct pursuit、2D PN、2D PN + MPPI、2D PN + NMPC |
+| `guidance.py` | 实现 2D direct pursuit、2D PN、2D PN + MPPI、2D PN + EMPC |
 | `simulation.py` | 统一仿真循环，保证各算法在相同条件下运行 |
 | `metrics.py` | 计算捕获、距离、能量、路径长度和 yaw 平滑性指标 |
 | `plotting.py` | 生成轨迹、距离、加速度、yaw rate 和指标图 |
@@ -151,7 +151,7 @@ yaw 用于描述二维俯瞰平面内的机头朝向。每个仿真步中，追�
 
 - 圆心 `[35, 0, 1] m`，半径 12 m，角速度 0.25 rad/s。
 - 目标持续改变 LOS 方向，是二维追踪中更具挑战性的测试场景。
-- 适合观察 PN、MPPI 和 NMPC 对目标机动的响应能力。
+- 适合观察 PN、MPPI 和 EMPC 对目标机动的响应能力。
 
 ## 6. 对比算法与框架原理
 
@@ -160,7 +160,9 @@ yaw 用于描述二维俯瞰平面内的机头朝向。每个仿真步中，追�
 | `basic` / 2D direct pursuit | 基线算法 | 水平速度方向始终指向目标当前位置 |
 | `pn` / 2D PN | 比例导引基线 | 使用二维 LOS 角速度生成横向修正，并加入沿 LOS 接近项 |
 | `pn_mppi` / 2D PN + MPPI | 采样预测控制对比 | 围绕 PN 名义控制采样多条控制序列并按代价加权 |
-| `pn_nmpc` / 2D PN + NMPC | 本部分重点算法 | 围绕 PN 趋势构造候选控制，并用短时预测代价选择当前加速度 |
+| `pn_nmpc`（历史代码标识）/ 2D PN + EMPC | 本部分重点算法 | 围绕 PN 趋势枚举候选控制，并用短时预测代价选择当前加速度 |
+
+命名说明：本文将该候选枚举式控制器统一称为 **EMPC（Enumerative Model Predictive Control，枚举式模型预测控制）**。当前源代码、命令行参数、输出目录、已有 CSV 和已生成图片图例中仍保留 `pn_nmpc`、`nmpc_acceleration()`、`nmpc_w_*` 以及标签 `2D PN + NMPC` 等历史标识，以避免破坏现有接口和结果文件；这些标识在本文中均指 EMPC，不表示该实现是连续非线性规划意义上的 NMPC。本文的 EMPC 也不是以经济目标为核心的 Economic MPC。
 
 ### 6.1 2D direct pursuit
 
@@ -207,7 +209,7 @@ a_PN = N V_c omega_LOS lateral
 
 ```text
 a_close = k_close (v_des_along_los - v_p · u_LOS) u_LOS
-a_nom = a_PN + a_close
+a_nom = sat_xy(a_PN + a_close, a_max)
 ```
 
 在组合框架中，PN 不负责处理全部控制品质问题，而是提供几何意义明确的名义拦截趋势。
@@ -221,15 +223,15 @@ MPPI 以 PN 加速度为名义控制序列，在预测窗口内采样多条带�
 - 可以探索 PN 附近的多个控制方向；
 - 通过采样平滑噪声生成控制序列；
 - 使用固定随机种子保证对比可复现；
-- 相比候选式 NMPC，MPPI 更依赖采样数量、噪声尺度和温度参数。
+- 相比候选式 EMPC，MPPI 更依赖采样数量、噪声尺度和温度参数。
 
-### 6.4 2D PN + NMPC：候选式短时预测优化
+### 6.4 2D PN + EMPC：候选式短时预测优化
 
-本部分中的 NMPC 是轻量候选式预测控制，而不是依赖 CasADi/acados 等外部求解器的连续优化器。控制流程为：
+本部分中的 EMPC 是围绕 PN 名义趋势进行候选枚举的轻量预测控制器，而不是依赖 CasADi/acados 等外部求解器的连续优化器。控制流程为：
 
-1. 计算 PN 名义控制 `a_PN`；
-2. 围绕 PN 构造候选控制，包括缩放 PN、直接拦截、同速接近、速度匹配、稳定跟踪、软跟踪和 LOS 垂直扰动等；
-3. 对每个候选加速度，在预测窗口内使用相同二维定高动力学前向滚动；
+1. 计算包含 PN 横向项和沿 LOS 闭合项的名义控制 `a_nom`；
+2. 围绕 `a_nom` 构造 16 个候选控制，包括缩放 PN 名义控制、直接拦截、同速接近、速度匹配、稳定跟踪、软跟踪和 LOS 垂直扰动等；
+3. 对每个候选加速度，在整个预测窗口内保持该候选为常值，并使用相同二维定高动力学前向滚动；
 4. 目标预测使用当前目标状态的常加速度外推，即 `p_t(t) = p_t0 + v_t0·t + 0.5·a_t0·t²`，`v_t(t) = v_t0 + a_t0·t`；目标加速度在整个预测时域内保持为调用时刻的初始值；
 5. 计算距离、路径、速度误差、稳态误差、控制能量、控制平滑性和偏离 PN 趋势等代价；
 6. 选择综合代价最低的候选作为当前控制。
@@ -250,36 +252,36 @@ MPPI 以 PN 加速度为名义控制序列，在预测窗口内采样多条带�
 
 | 权重 | 数值 | 含义 |
 | --- | ---: | --- |
-| `nmpc_w_dist` | 12.0 | 终端距离权重 |
-| `nmpc_w_path` | 0.1 | 预测路径距离权重 |
-| `nmpc_w_control` | 0.015 | 控制能量权重 |
-| `nmpc_w_smooth` | 0.08 | 控制平滑权重 |
-| `nmpc_w_pn` | 0.04 | 偏离 PN 趋势权重 |
+| `nmpc_w_dist`（历史字段名） | 12.0 | 终端距离及 EMPC 附加终端/稳态项的基础权重 |
+| `nmpc_w_path`（历史字段名） | 0.1 | 预测路径距离及 EMPC 速度匹配项的基础权重 |
+| `nmpc_w_control`（历史字段名） | 0.015 | 控制能量权重 |
+| `nmpc_w_smooth`（历史字段名） | 0.08 | 控制平滑权重 |
+| `nmpc_w_pn`（历史字段名） | 0.04 | 偏离 PN 名义趋势权重 |
 
 ### 7.3 代价函数的通用形式
 
-本仿真中 NMPC 和 MPPI 的代价函数均遵循标准 NMPC 的终端代价 + 逐步代价结构：
+本仿真中 EMPC 和 MPPI 的代价函数均采用终端代价与预测窗口累计代价相加的结构：
 
 $$
-J = \Phi(x_N) + \sum_{k=1}^{N-1} L_k(x_k, u_k, u_{k-1})
+J = \Phi(x_H) + \sum_{k=1}^{H} L_k(x_k, u_k, \tilde u_{k-1})
 $$
 
-其中 $x_k = [p_k, v_k]$ 为追踪机第 $k$ 步的状态，$u_k = a_k$ 为控制量（水平加速度），$\Phi$ 为终端代价，$L_k$ 为逐步代价。
+其中 $x_k = [p_k, v_k]$ 为追踪机第 $k$ 步状态，$u_k=a_k$ 为水平加速度，$\tilde u_0$ 为上一仿真周期实际采用的加速度，此后 $\tilde u_{k-1}=u_{k-1}$。代码中的路径累计包含第 $H$ 步，同时还会额外计算终端项，因此终端状态同时出现在路径累计和终端代价中。
 
 #### 7.3.1 各项代价的通用归类
 
 | 类型 | 符号 | 数学形式 | 范数类型 |
 |------|------|---------|---------|
-| 终端位置误差 | $\Phi_{\text{dist}}$ | $w_1 \cdot \|\Delta p_N\|$ | $L_1$ |
-| 终端速度误差 | $\Phi_{\text{vel}}$ | $\alpha w_1 \cdot \|\Delta v_N\|$ | $L_2$ |
-| 路径跟踪 | $L_{\text{path}}$ | $w_2 \cdot \|\Delta p_k\|$ | $L_1$ |
-| 速度匹配 | $L_{\text{vel}}$ | $\beta w_2 \cdot \|\Delta v_k\|^2 \Delta t$ | $L_2$ |
-| 控制能量 | $L_{\text{ctrl}}$ | $w_3 \cdot \|u_k\|^2 \Delta t$ | $L_2$ |
-| 控制平滑 | $L_{\text{smooth}}$ | $w_4 \cdot \|u_k - u_{k-1}\|^2$ | $L_2$ |
-| PN 保底 | $L_{\text{ref}}$ | $w_5 \cdot \|u_k - u_{\text{PN}}\|^2$ | $L_2$ |
-| 末端稳态 | $L_{\text{steady}}$ | $s(k) \cdot \left(\|\Delta p_k\|^2 + \lambda \|\Delta v_k\|^2\right)$ | $L_2$ |
+| 终端位置误差 | $\Phi_{\text{dist}}$ | $w_1 \cdot \|\Delta p_H\|_2$ | 未平方欧氏范数 |
+| 终端速度误差 | $\Phi_{\text{vel}}$ | $\alpha w_1 \cdot \|\Delta v_H\|_2$ | 未平方欧氏范数 |
+| 路径跟踪 | $L_{\text{path}}$ | $w_2 \cdot \|\Delta p_k\|_2$ | 未平方欧氏范数 |
+| 速度匹配 | $L_{\text{vel}}$ | $\beta w_2 \cdot \|\Delta v_k\|_2^2 \Delta t$ | 平方欧氏范数 |
+| 控制能量 | $L_{\text{ctrl}}$ | $w_3 \cdot \|u_k\|_2^2 \Delta t$ | 平方欧氏范数 |
+| 控制平滑 | $L_{\text{smooth}}$ | $w_4 \cdot \|u_k-\tilde u_{k-1}\|_2^2$ | 平方欧氏范数 |
+| PN 趋势偏离 | $L_{\text{ref}}$ | $w_5 \cdot \|u_k-u_{\text{nom}}\|_2^2$ | 平方欧氏范数 |
+| 后半窗口稳态 | $L_{\text{steady}}$ | $\gamma w_1 \cdot s(k) \cdot \left(\|\Delta p_k\|_2^2+\lambda\|\Delta v_k\|_2^2\right)$ | 平方欧氏范数 |
 
-其中 $\alpha=0.45$、$\beta=0.35$、$\lambda=0.35$ 为硬编码的相对权重系数，$s(k)$ 为后半预测窗口（$k > H/2$）激活的稳态开关函数。
+其中 $\alpha=0.45$、$\beta=0.35$、$\gamma=0.18$、$\lambda=0.35$ 为代码中的固定系数，$s(k)$ 在 $k>H/2$ 时为 1，否则为 0。所有范数均由 `norm_xy()`/`np.linalg.norm(...[:2])` 计算，只使用 XY 分量。
 
 #### 7.3.2 统一展开形式
 
@@ -287,29 +289,30 @@ $$
 
 $$
 \begin{aligned}
-J = &\sum_{k=1}^{H} \Big[ w_{\text{path}} \cdot \|\Delta p_k\| + \beta w_{\text{path}} \cdot \|\Delta v_k\|^2 \Delta t + w_{\text{ctrl}} \cdot \|u_k\|^2 \Delta t \\
-     &+ w_{\text{smooth}} \cdot \|u_k - u_{k-1}\|^2 + w_{\text{pn}} \cdot \|u_k - u_{\text{PN}}\|^2 + s(k) \cdot \left(\|\Delta p_k\|^2 + \lambda \|\Delta v_k\|^2\right) \Big] \\
-     &+ w_{\text{dist}} \cdot \|\Delta p_H\| + \alpha w_{\text{dist}} \cdot \|\Delta v_H\|
+J = &\sum_{k=1}^{H} \Big[ w_{\text{path}} \|\Delta p_k\|_2 + \beta w_{\text{path}} \|\Delta v_k\|_2^2 \Delta t + w_{\text{ctrl}} \|u_k\|_2^2 \Delta t \\
+     &+ w_{\text{smooth}} \|u_k-\tilde u_{k-1}\|_2^2 + w_{\text{pn}} \|u_k-u_{\text{nom}}\|_2^2 \\
+     &+ \gamma w_{\text{dist}} s(k) \left(\|\Delta p_k\|_2^2+\lambda\|\Delta v_k\|_2^2\right) \Big] \\
+     &+ w_{\text{dist}} \|\Delta p_H\|_2 + \alpha w_{\text{dist}} \|\Delta v_H\|_2
 \end{aligned}
 $$
 
-**范数策略**：位置误差项使用 $L_1$ 范数（对较大距离不过度惩罚，避免过度控制），速度误差和控制量使用 $L_2$ 范数（对大幅偏差施加平方级惩罚，鼓励平顺）。
+这里的“未平方欧氏范数”和“平方欧氏范数”不能分别写成 $L_1$ 与 $L_2$ 范数：两者底层都是 $L_2$（欧氏）范数，区别仅在于是否再平方。
 
-### 7.4 NMPC 代价结构
+### 7.4 EMPC 代价结构
 
-NMPC 使用完整的代价函数（上述统一形式的所有项），包含终端速度误差、速度匹配代价和末端稳态代价。这些附加项的作用为：
+EMPC 使用上述完整代价。对第 $i$ 个候选，代码令整个预测窗口内 $u_{i,k}=u_i$，而不是优化一条随步数变化的控制序列。因此除第一步相对上一仿真周期加速度的变化外，该候选内部后续各步的平滑增量均为 0。终端速度误差、速度匹配代价和后半窗口稳态代价的作用为：
 - 终端速度误差降低接近目标时的速度不匹配；
 - 速度匹配代价在整条预测轨迹上鼓励追踪机与目标保持相近速度；
 - 末端稳态代价在后半预测窗口加强位置和速度的二次惩罚，抑制掠过目标后的振荡。
 
-NMPC 使用候选式寻优：对一组由导引几何构造的候选加速度逐个计算上述代价，选择代价最低的候选作为当前控制量。
+EMPC 使用候选式寻优：对一组由导引几何构造的候选加速度逐个计算上述代价，选择代价最低的候选作为当前控制量。
 
 ### 7.5 MPPI 代价结构
 
 MPPI 使用简化代价，不包含终端速度误差、速度匹配代价和末端稳态代价：
 
 $$
-J = \sum_{k=1}^{H} \Big[ w_{\text{path}} \cdot \|\Delta p_k\| + w_{\text{ctrl}} \cdot \|u_k\|^2 \Delta t + w_{\text{smooth}} \cdot \|u_k - u_{k-1}\|^2 + w_{\text{pn}} \cdot \|u_k - u_{\text{PN}}\|^2 \Big] + w_{\text{dist}} \cdot \|\Delta p_H\|
+J_i = \sum_{k=1}^{H} \Big[ w_{\text{path}}\|\Delta p_{i,k}\|_2 + w_{\text{ctrl}}\|u_{i,k}\|_2^2\Delta t + w_{\text{smooth}}\|u_{i,k}-\tilde u_{i,k-1}\|_2^2 + w_{\text{pn}}\|u_{i,k}-u_{\text{nom}}\|_2^2 \Big] + w_{\text{dist}}\|\Delta p_{i,H}\|_2
 $$
 
 随后进行指数加权：
@@ -319,16 +322,18 @@ $$
 a_{\text{cmd}} = \frac{\sum_i \text{weight}_i \cdot a_{i,\text{first}}}{\sum_i \text{weight}_i}
 $$
 
-### 7.6 NMPC 与 MPPI 的目标预测模型差异
+### 7.6 EMPC 与 MPPI 的目标预测模型差异
 
-| 特性 | NMPC (`_rollout_cost`) | MPPI (`_mppi_sequence_costs`) |
+| 特性 | EMPC (`_rollout_cost`) | MPPI (`_mppi_sequence_costs`) |
 |------|------------------------|-------------------------------|
 | 位置预测 | $p_t(t) = p_{t0} + v_{t0} \cdot t + \frac{1}{2} a_{t0} \cdot t^2$ | $p_t(t) = p_{t0} + v_{t0} \cdot t$ |
 | 速度预测 | $v_t(t) = v_{t0} + a_{t0} \cdot t$ | $v_t(t) = v_{t0}$（恒速） |
 | 加速度假设 | 常加速度（保持调用时刻的初始值） | 忽略目标加速度 |
 | 更新方式 | 每步从初始状态解析计算（非递推） | 每步从初始状态解析计算（非递推） |
 
-NMPC 利用目标的当前加速度信息进行匀加速外推，使其在圆周机动等目标加速场景中具备更准确的前瞻能力；MPPI 假设目标匀速，实现更简单但代价函数中也因此未引入速度匹配项（因目标速度在预测中恒定，速度匹配仅等同于追踪机自身降速）。
+在离线仿真中，EMPC 利用 `target_state()` 给出的当前目标加速度进行常加速度外推，而 MPPI 使用恒速外推。MPPI 未加入速度匹配项是当前代价函数的设计选择，并非恒速预测模型的必然结果。
+
+需要区分离线与 Gazebo 接入：当前 `guidance_node.py` 从 `VehicleOdometry` 构造目标状态时将 `target.acceleration` 置为零，且导引计算传入的是目标实际 odometry 状态。因此 Gazebo 中 EMPC 的目标预测当前实际退化为基于实测位置、速度的恒速外推；解析圆周参考轨迹中的向心加速度只用于目标参考生成和调试显示，未传入追踪机 EMPC 预测器。
 
 ## 8. 性能评价指标
 
@@ -393,9 +398,9 @@ outputs/<scenario>/
 | 2D direct pursuit | 6.30 | 0.0111 | 1194.02 | 5.15 | 123.62 | 1.292 |
 | 2D PN | 6.40 | 0.0009 | 1170.51 | 4.93 | 106.42 | 1.292 |
 | 2D PN + MPPI | 5.55 | 0.0010 | 363.69 | 4.33 | 86.46 | 1.170 |
-| **2D PN + NMPC** | **5.45** | **0.0000** | **106.25** | **3.45** | **48.18** | **0.247** |
+| **2D PN + EMPC** | **5.45** | **0.0000** | **106.25** | **3.45** | **48.18** | **0.247** |
 
-在静止目标场景中，NMPC 同时取得当前输出中最快捕获、最低控制能量、最短路径和最平滑 yaw 转向，说明候选式预测控制在简单目标下能有效减少不必要机动。
+在静止目标场景中，EMPC 同时取得当前输出中最快捕获、最低控制能量、最短路径和最平滑 yaw 转向，说明候选式预测控制在简单目标下能有效减少不必要机动。
 
 ### 10.2 匀速直线目标场景
 
@@ -404,9 +409,9 @@ outputs/<scenario>/
 | 2D direct pursuit | 5.90 | 0.0003 | 1247.22 | 3.02 | 121.43 | 1.390 |
 | 2D PN | 5.65 | 0.0040 | 1188.74 | 3.31 | 135.55 | 1.333 |
 | 2D PN + MPPI | 5.05 | 0.0005 | 353.47 | 2.57 | 118.75 | 1.322 |
-| **2D PN + NMPC** | **4.80** | **0.0000** | **91.32** | **2.31** | **116.65** | **0.254** |
+| **2D PN + EMPC** | **4.80** | **0.0000** | **91.32** | **2.31** | **116.65** | **0.254** |
 
-在线性目标场景中，NMPC 取得最短捕获时间和最低控制能量。相比 MPPI，NMPC 控制能量进一步下降，yaw rate mean 明显降低，说明其候选控制和稳态跟踪项有助于减少追踪过程中的转向剧烈程度。
+在线性目标场景中，EMPC 取得最短捕获时间和最低控制能量。相比 MPPI，EMPC 控制能量进一步下降，yaw rate mean 明显降低，说明其候选控制和稳态跟踪项有助于减少追踪过程中的转向剧烈程度。
 
 ### 10.3 圆周机动目标场景
 
@@ -415,16 +420,16 @@ outputs/<scenario>/
 | 2D direct pursuit | 9.50 | 0.0060 | 1216.61 | 4.62 | 155.11 | 1.279 |
 | 2D PN | 5.60 | 0.0005 | 1132.97 | 4.98 | 159.01 | 1.215 |
 | 2D PN + MPPI | **5.10** | 0.0010 | 358.71 | 4.12 | 148.88 | 1.198 |
-| **2D PN + NMPC** | 5.35 | 0.0363 | **153.39** | **3.55** | **140.91** | **0.248** |
+| **2D PN + EMPC** | 5.35 | 0.0363 | **153.39** | **3.55** | **140.91** | **0.248** |
 
-圆周目标持续改变 LOS 方向，是二维追踪中更困难的场景。MPPI 捕获时间最短，说明采样式预测在快速接近上更激进；NMPC 捕获时间略慢于 MPPI，但控制能量、平均距离、路径长度和 yaw 平滑性均更优，体现出更偏向低能耗和平滑跟踪的取舍。
+圆周目标持续改变 LOS 方向，是二维追踪中更困难的场景。MPPI 捕获时间最短，说明采样式预测在快速接近上更激进；EMPC 捕获时间略慢于 MPPI，但控制能量、平均距离、路径长度和 yaw 平滑性均更优，体现出更偏向低能耗和平滑跟踪的取舍。
 
 ### 10.4 离线仿真综合结论
 
 - **2D direct pursuit**：实现简单，能够完成基本捕获，但控制能量较高，对机动目标捕获效率较低。
 - **2D PN**：相比基础追踪具备更明确的拦截几何，尤其在圆周场景中显著缩短捕获时间，但控制能量仍较高。
 - **2D PN + MPPI**：在三种场景中均降低控制能量，并保持较快捕获；圆周场景捕获时间最短。
-- **2D PN + NMPC**：在当前输出中整体表现为最低控制能量、最低 yaw rate mean 和较短路径；静止和直线场景捕获最快，圆周场景略慢于 MPPI，但更平滑、更省控制。
+- **2D PN + EMPC**：在当前输出中整体表现为最低控制能量、最低 yaw rate mean 和较短路径；静止和直线场景捕获最快，圆周场景略慢于 MPPI，但更平滑、更省控制。
 
 ### 10.5 离线仿真图示对比
 
@@ -516,6 +521,7 @@ ros2 launch gazebosimulation2d guidance.launch.py algorithm:=pn_mppi scenario:=c
 启动阶段会以 `startup_2d` 低频输出目标机/追踪机的就位误差、速度和命令状态，默认周期为 1 s。追踪阶段可通过 `debug_log:=true` 开启 `debug_2d` 周期日志：
 
 ```bash
+# `pn_nmpc` 是 EMPC 当前保留的历史代码标识。
 ros2 launch gazebosimulation2d guidance.launch.py \
   algorithm:=pn_nmpc \
   scenario:=circle \
@@ -526,8 +532,8 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 
 `debug_2d` 日志包含：
 
-- `target_odom`：目标机实际 odometry 位置、速度、加速度；
-- `target_cmd`：目标机参考位置、速度、加速度和 yaw setpoint；
+- `target_odom`：目标机实际 odometry 位置、速度，以及当前代码中固定为零的状态加速度字段；
+- `target_cmd`：目标机参考位置、速度、解析轨迹加速度和 yaw setpoint；其中加速度用于诊断显示，实际目标机 setpoint 只启用 position + velocity；
 - `pursuer_odom`：追踪机实际 odometry 位置、速度、加速度；
 - `pursuer_cmd`：追踪机 velocity + acceleration 控制指令、原始导引加速度和限幅后加速度。
 
@@ -544,7 +550,7 @@ Gazebo CSV 字段包括：时间、两机位置速度、追踪机实际发布的
 ```bash
 uv run plot_gazebo_csv.py \
   outputs/gazebo2d/circle \
-  --output-dir outputs/circle
+  --output-dir outputs/gazebo2d/circle/total
 ```
 
 `plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。
@@ -573,16 +579,16 @@ uv run plot_gazebo_csv.py \
 | 2D direct pursuit | 10.90 | 0.0370 | 648.97 | 8.89 | 113.42 | 1.415 | 1.896 |
 | 2D PN | 6.15 | **0.0074** | 603.17 | 8.95 | 112.34 | 1.362 | 3.138 |
 | **2D PN + MPPI** | **5.90** | 0.0197 | 250.27 | 7.83 | 101.60 | 0.822 | 1.312 |
-| 2D PN + NMPC | 6.00 | 0.0781 | **174.84** | **7.82** | **96.54** | **0.340** | **0.399** |
+| 2D PN + EMPC | 6.00 | 0.0781 | **174.84** | **7.82** | **96.54** | **0.340** | **0.399** |
 
 在 25 s Gazebo 圆周目标闭环仿真中，四种算法均完成 XY 捕获。主要现象为：
 
 - **2D direct pursuit** 捕获时间最长，控制能量和 yaw rate mean 也较高，体现出追赶式轨迹在机动目标下效率较低；
 - **2D PN** 最小距离最低，说明其比例导引几何在闭环 PX4 环境中仍能形成有效拦截，但控制能量和 yaw rate 方差较高；
 - **2D PN + MPPI** 捕获时间最短，同时相对 basic/PN 明显降低控制能量和 yaw 转向强度；
-- **2D PN + NMPC** 捕获时间略慢于 MPPI，但控制能量、平均距离、路径长度、yaw rate mean 和 yaw rate 方差均为当前 Gazebo 输出中最优，表现出更偏向低能耗和平滑跟踪的取舍。
+- **2D PN + EMPC** 捕获时间略慢于 MPPI，但控制能量、平均距离、路径长度、yaw rate mean 和 yaw rate 方差均为当前 Gazebo 输出中最优，表现出更偏向低能耗和平滑跟踪的取舍。
 
-这些 Gazebo 结果与离线圆周场景的总体趋势一致：MPPI 更激进、捕获更快；NMPC 更平滑、更省控制，但在最小距离或首次捕获时间上不一定最优。需要注意，Gazebo 结果同时受到 PX4 底层控制、机体模型、setpoint 跟踪误差和 25 s 统计窗口影响，因此不应与 40 s 离线质点仿真的绝对数值直接等同。
+这些 Gazebo 结果与离线圆周场景的总体趋势一致：MPPI 更激进、捕获更快；EMPC 更平滑、更省控制，但在最小距离或首次捕获时间上不一定最优。需要注意，Gazebo 结果同时受到 PX4 底层控制、机体模型、setpoint 跟踪误差和 25 s 统计窗口影响，因此不应与 40 s 离线质点仿真的绝对数值直接等同。
 
 ### 12.2 Gazebo 综合对比插图
 
@@ -610,7 +616,7 @@ outputs/gazebo2d/circle/total/
 - yaw 只表示水平机头朝向，不包含完整 roll/pitch/yaw 姿态动力学。
 - 离线仿真采用质点模型，Gazebo 结果会受到 PX4 底层控制器、机体模型、setpoint 跟踪误差和通信频率影响。
 - 当前 Gazebo 追踪阶段不再通过 position setpoint 强制拉住追踪机高度，而是发布 z 速度和 z 加速度为 0 的 velocity + acceleration setpoint；实际高度保持效果取决于 PX4 底层控制器与机体响应。
-- MPPI 与 NMPC 的结果依赖预测窗口、权重、候选集合、采样数、噪声尺度和温度参数。
+- MPPI 与 EMPC 的结果依赖预测窗口、权重、候选集合、采样数、噪声尺度和温度参数。
 
 ## 14. 章节推荐结构
 
@@ -624,7 +630,7 @@ X.3 对比算法与预测控制框架
   X.3.1 基础追踪算法
   X.3.2 二维比例导引算法
   X.3.3 PN + MPPI 采样预测控制
-  X.3.4 PN + NMPC 候选式预测控制
+  X.3.4 PN + EMPC 候选式预测控制
 X.4 评价指标与实验设置
 X.5 离线数值仿真结果与分析
   X.5.1 静止目标场景
