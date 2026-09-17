@@ -61,13 +61,14 @@ uv run plot_gazebo_csv.py outputs/gazebo2d/circle --output-dir outputs/circle
 ```bash
 # 6_Simulation：双机 Gazebo 接入（pursuer=/px4_1, target=/px4_2）
 cd 6_Simulation
+# 首次构建需用 --packages-up-to 把 px4_msgs 一并编译，之后可改用 --packages-select
 colcon build --base-paths src --packages-select gazebosimulation
 source install/setup.bash
 ros2 launch gazebosimulation guidance.launch.py algorithm:=pn_fov_nmpc scenario:=circle
 
 # 7_2Dsimulation：2D 接入
 cd 7_2Dsimulation
-colcon build --packages-select gazebosimulation2d
+colcon build --packages-up-to gazebosimulation2d
 source install/setup.bash
 ros2 launch gazebosimulation2d guidance.launch.py algorithm:=pn_mppi scenario:=circle
 
@@ -85,7 +86,8 @@ colcon test --packages-select px4_mocap_hover && colcon test-result --verbose
 ```
 
 - 反复调试 launch/config 时可用 `--symlink-install` 免去重复构建；只改 YAML 参数不需要重新 `colcon build`。
-- 从零构建 `gazebosimulation` 时按 README 使用 `--packages-up-to gazebosimulation --cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`。
+- `src/px4_msgs` 被 `.gitignore` 忽略、不在版本库中，所以工作空间首次构建必须用 `--packages-up-to <包名>` 把 `px4_msgs` 一并编译（`px4_msgs` 约需 3~4 分钟）；只有 `install/px4_msgs` 已存在时，才能用 `--packages-select` 只编译目标包。
+- 从零构建 `gazebosimulation`、`gazebosimulation2d` 时按各自 README 补上 `--cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`，避免 CMake 选到错误的 Python。
 
 ### 测试
 

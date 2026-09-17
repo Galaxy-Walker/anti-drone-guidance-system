@@ -64,6 +64,10 @@ cd 7_2Dsimulation
 编译 Gazebo 接入包：
 
 ```bash
+# 首次构建：本仓库不跟踪 src/px4_msgs，需用 --packages-up-to 把 px4_msgs 一并编译（约 3~4 分钟）
+colcon build --packages-up-to gazebosimulation2d --cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+
+# 增量编译：install/ 中已有 px4_msgs 后，只编译导引包
 colcon build --packages-select gazebosimulation2d
 ```
 

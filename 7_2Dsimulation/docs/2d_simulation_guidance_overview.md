@@ -35,7 +35,7 @@
 
 ### 2.2 ROS2/PX4/Gazebo 二维闭环接入模块
 
-路径：`src/gazebosimulation2d/`。该包通过 `px4_msgs` 使用 PX4 ROS2 消息类型，当前仓库的 `7_2Dsimulation/src/` 下未包含独立的 `px4_msgs` 源码包。
+路径：`src/gazebosimulation2d/`。该包通过 `px4_msgs` 使用 PX4 ROS2 消息类型；`src/px4_msgs` 被 `.gitignore` 忽略、不在版本库中，因此首次构建必须先用 `--packages-up-to` 把 `px4_msgs` 一并编译出来。
 
 - `gazebosimulation2d` 是 ROS2 Python 包，用于将二维导引算法接入 PX4/Gazebo 双机 Offboard 仿真。
 - `guidance_node.py` 控制两架 PX4 实例：`/px4_1` 为追踪机，`/px4_2` 为目标机。
@@ -490,7 +490,8 @@ outputs/<scenario>/
 
 ```bash
 cd 7_2Dsimulation
-colcon build --packages-select gazebosimulation2d
+# 首次构建需先编译 px4_msgs（本仓库不跟踪 src/px4_msgs）；之后可改用 --packages-select 增量编译
+colcon build --packages-up-to gazebosimulation2d
 source install/setup.bash
 ```
 
