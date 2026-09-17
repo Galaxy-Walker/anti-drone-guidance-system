@@ -11,7 +11,9 @@ setup(
     packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
-        (f"share/{package_name}", ["package.xml", "README.md"]),
+        # 包级 README 已在文档重构中合并到 6_Simulation/README.md 与根目录 README.md，
+        # 这里不要再列出它，否则 setuptools 会因文件缺失而安装失败。
+        (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/config", ["config/default.yaml"]),
         (f"share/{package_name}/launch", ["launch/guidance.launch.py"]),
     ],
