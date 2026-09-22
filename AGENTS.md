@@ -25,7 +25,7 @@
 - **ROS 2 包使用系统 Python（3.12）**，依赖由 ROS 提供。不要把 `rclpy`、`px4_msgs` 等 ROS 依赖加进根 `pyproject.toml`。
 - 开发机：Ubuntu 24.04（WSL2）+ ROS 2 **Jazzy** + PX4 v1.16 SITL/Gazebo + Micro XRCE-DDS Agent + QGroundControl。
 - `8_MoCap` 真机运行在另一台机器 `/home/nvidia/ws_ros2`（Jetson，ROS 2 **Humble** + PX4 1.15.4）。不要假设开发机的 Jazzy 与其完全一致，改动该模块时保持 1.15 话题与 API 兼容。
-- 各工作空间的 `src/px4_msgs` 被 `.gitignore` 忽略、不在版本库中，当前固定在 px4_msgs `release/1.15`（`a1045ec`）。克隆后需自行放入或从其他已构建工作空间 source。**注意：`5_AntiDrone/src` 目前没有 `px4_msgs`**，构建/运行前需自行补充。
+- 各工作空间的 `src/px4_msgs` 被 `.gitignore` 忽略、不在版本库中，克隆后需自行放入或从其他已构建工作空间 source。**版本必须与所运行的 PX4 一致**：开发机 PX4 v1.16 → `release/1.16`（`392e831`，`6_Simulation` / `7_2Dsimulation` 用）；Jetson PX4 1.15.4 → `release/1.15`（`a1045ec`，`8_MoCap` 用）。版本不一致时 Fast DDS 会直接丢弃布局变化的样本（订阅端 0 帧，`ros2 topic hz` 也看不到数据，日志刷 `RTPS_READER_HISTORY: payload 220 > history 207`）：典型例子是 1.15 的 `VehicleLocalPosition` 解析不了 1.16 的载荷（新增 `dist_bottom_var` / `delta_dist_bottom` / `dist_bottom_reset_counter`，`hagl_max` 拆成 `hagl_max_z` / `hagl_max_xy`）；`VehicleOdometry`、`TrajectorySetpoint`、`OffboardControlMode` 等两边布局一致，不受影响。**注意：`5_AntiDrone/src` 目前没有 `px4_msgs`**，构建/运行前需自行补充。
 - Gazebo 闭环仿真所需的 QGC、PX4 SITL、`MicroXRCEAgent udp4 -p 8888` 一律由使用者在外部终端手动启动；代码和 launch **不得**尝试拉起这些进程。
 - 无 CI、无 Makefile。验证靠下面的本地命令。
 

@@ -101,6 +101,7 @@ code/
 | 核心依赖 | NumPy >= 2.4, Matplotlib >= 3.10, Foxglove SDK >= 0.24 |
 | 中间件 | ROS 2 Jazzy |
 | 飞控 | PX4 Autopilot v1.16（SITL + Gazebo） |
+| 消息定义 | px4_msgs release/1.16（须与所用 PX4 版本一致，见 AGENTS.md） |
 | 通信桥 | Micro XRCE-DDS Agent |
 | 地面站 | QGroundControl |
 | 仿真器 | Gazebo |

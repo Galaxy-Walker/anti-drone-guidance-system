@@ -71,6 +71,8 @@ colcon build --packages-up-to gazebosimulation2d --cmake-clean-cache --cmake-arg
 colcon build --packages-select gazebosimulation2d
 ```
 
+> `src/px4_msgs` 不随仓库跟踪，需自行放入，且**必须与所用 PX4 版本一致**：开发机 PX4 v1.16 对应 `release/1.16`（`392e831`）。版本不一致时，字段布局变化的 `VehicleLocalPosition` 会被 Fast DDS 直接丢弃（订阅端 0 帧，日志刷 `RTPS_READER_HISTORY: payload 220 > history 207`）；本包导引与视觉链路只订 `vehicle_odometry`，两边布局一致，不受影响。
+
 加载环境：
 
 ```bash
@@ -100,6 +102,19 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 ```
 
 Gazebo 接入包只发布 PX4 Offboard setpoint，不负责启动 Gazebo、PX4 SITL、Micro XRCE-DDS Agent 或 QGC。运行前需要先启动对应 PX4/Gazebo 双机环境。
+
+### QGroundControl 双机接入备忘录（WSL2 + Windows）
+
+PX4 SITL 的 GCS MAVLink 本地端口是 `18570 + 实例号`（`ROMFS/px4fmu_common/init.d-posix/px4-rc.mavlink`）：追踪机（实例 0）在 `18570`，目标机（实例 1）在 `18571`。两个实例都只把心跳发往 `127.0.0.1:14550`，而 WSL2 默认 NAT 模式下 **WSL2 → Windows 的 `127.0.0.1` UDP 不通**（实测 Windows 侧监听收不到任何包），所以 Windows 上跑的 QGC 只能靠手动链路主动连 WSL 的 IP，且**每个实例一条**：只配一条时 QGC 只会识别到该端口对应的那一架（例如只配 `18570` 就只看到追踪机）。配置方法：
+
+1. QGC → 应用设置（Application Settings）→ Comm Links → Add：
+   - 追踪机：Name `WSL-1`，Type `UDP`，Listening Port `18570`，Target Host = WSL IP，Target Port `18570`，勾选 Automatically Connect。
+   - 目标机：Name `WSL-2`，同上，端口改为 `18571`。
+2. WSL IP 用 `hostname -I` 取第一个地址（本机曾为 `172.23.197.198`）。
+
+注意：
+
+- WSL IP 在 NAT 模式下每次 `wsl --shutdown` 后都可能变化，变了要同步改 QGC 的 Target Host。
 
 当前 2D Gazebo 接入行为：
 
