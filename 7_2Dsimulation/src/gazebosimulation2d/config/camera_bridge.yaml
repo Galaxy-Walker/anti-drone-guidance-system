@@ -1,0 +1,24 @@
+# 追踪机 x500_mono_cam_down 下视相机的 ros_gz_bridge 桥接配置。
+#
+# 本文件是 parameter_bridge 的 config_file（顶层列表），不是 ROS 节点参数文件。
+# gz 话题名在 P1 用本机 Gazebo 8.10 + PX4 v1.16 的 x500_mono_cam_down 模型实测：
+#   /world/default/model/x500_mono_cam_down_0/link/camera_link/sensor/imager/{image,camera_info}
+# 世界名、模型实例名或传感器名变化时必须同步修改；不要引入 YAML 字符串模板。
+# frame_id 逐桥接覆盖为光学系名称，与 vision_adapter 的 camera_frame_id 保持一致；
+# Gazebo 原始 frame（x500_mono_cam_down_0::camera_link::imager）不是光学系。
+- ros_topic_name: /camera/image_raw
+  gz_topic_name: /world/default/model/x500_mono_cam_down_0/link/camera_link/sensor/imager/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  frame_id: camera_link_optical
+  lazy: true
+- ros_topic_name: /camera/camera_info
+  gz_topic_name: /world/default/model/x500_mono_cam_down_0/link/camera_link/sensor/imager/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  frame_id: camera_link_optical
+  lazy: true

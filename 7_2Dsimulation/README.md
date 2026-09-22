@@ -126,6 +126,84 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 ros2 launch gazebosimulation2d guidance.launch.py debug_log:=true debug_log_period_s:=0.1
 ```
 
+## 下视相机与视觉 truth 旁路
+
+本轮只完成旁路基础设施：追踪机下视相机可订阅、纯几何投影可离线测试、ROS 伪检测可转换成独立位置量测。**导引闭环不消费视觉量测，不实现 YOLO，视觉不控制飞机。**
+
+依赖（由使用者安装）：
+
+```bash
+sudo apt install ros-jazzy-ros-gz-bridge ros-jazzy-vision-msgs ros-jazzy-rqt-image-view
+```
+
+追踪机改用 PX4 自带 `x500_mono_cam_down`（airframe 4014），目标机不变。外部终端启动追踪机示例：
+
+```bash
+cd ~/PX4-Autopilot
+PX4_SYS_AUTOSTART=4014 \
+PX4_GZ_MODEL_POSE="0,0,0,0,0,0" \
+PX4_UXRCE_DDS_NS=px4_1 \
+./build/px4_sitl_default/bin/px4 -i 0
+```
+
+启动桥接和 truth 适配器：
+
+```bash
+# 只启用相机桥接（/camera/image_raw + /camera/camera_info）
+ros2 launch gazebosimulation2d guidance.launch.py enable_camera:=true
+
+# 启用 truth 适配器；不强制启用仓库桥接，允许外部桥接提供 CameraInfo
+ros2 launch gazebosimulation2d guidance.launch.py vision_source:=truth
+
+# 两者一起
+ros2 launch gazebosimulation2d guidance.launch.py enable_camera:=true vision_source:=truth
+```
+
+默认 `enable_camera:=false`、`vision_source:=off`，启动行为与之前一致。桥接配置 `config/camera_bridge.yaml` 固定了实测 gz 话题名（world 名或模型实例名变化时需同步修改）。
+
+验收命令：
+
+```bash
+ros2 topic hz /camera/image_raw
+ros2 topic echo --once /camera/camera_info
+# 图像是 SENSOR_DATA（BEST_EFFORT）桥接，echo 需要匹配 QoS 才收得到
+ros2 topic echo --once --qos-reliability best_effort --field encoding /camera/image_raw
+ros2 run rqt_image_view rqt_image_view /camera/image_raw
+gz stats   # 记录 RTF；RTF 不足 1 时壁钟帧率会低于 30 Hz
+```
+
+已核验：相机 link 相对机体的安装平移为 `(0, 0, 0.10)` m、绕 y 轴 90°；Gazebo 相机为 1280×960、水平 FOV 1.74 rad、30 Hz、RGB_INT8；桥接 `frame_id` 覆盖为 `camera_link_optical`。30 Hz 是仿真时间频率，RTF 不足 1 时壁钟观测频率会更低。
+
+输出：
+
+- `/camera/detections_truth`：`vision_msgs/Detection2DArray`，`class_id="drone"`、score=1；bbox 中心有效，尺寸仅为占位。
+- `/vision/target_pose`：`geometry_msgs/PoseWithCovarianceStamped`，frame=`enu`；姿态用单位四元数占位，不提供姿态观测。
+- `outputs/gazebo2d_vision/vision_samples.csv`：每个定时器周期一行，含有效标志、拒绝原因、odometry 年龄/配对诊断和像素/位置数据。视觉 CSV 没有图像级检测延迟或独立像素误差，`plot_gazebo_csv.py` 不用于该文件。
+
+视觉节点参数（launch 参数同名，`vision_` 前缀仅用于与导引节点重名的调试参数）：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `vision_source` | off | 本轮只支持 off/truth，其他值报错 |
+| `enable_camera` | false | 仅 launch 使用，控制桥接，不控制相机渲染 |
+| `camera_frame_id` | camera_link_optical | 与 `camera_bridge.yaml` 的 `frame_id` 一致 |
+| `camera_mount_xyz` | [0.0, 0.0, 0.10] | 相机 link 相对机体 FLU 的安装平移 |
+| `camera_mount_rpy_deg` | [0.0, 90.0, 0.0] | 安装旋转，不含光学轴转换 |
+| `truth_rate_hz` | 10.0 | 独立定时器，不与图像同频 |
+| `pose_timeout_s` / `pose_pair_tolerance_s` | 0.2 / 0.05 | 接收时间新鲜度与两机配对容差 |
+| `pixel_noise_px` | 3.0 | 协方差假设，不代表实际添加随机噪声 |
+| `target_plane_sigma_m` | 0.1 | 输出 z 不确定度假设 |
+| `vision_record_data` / `vision_record_output_dir` | true / outputs/gazebo2d_vision | CSV 开关与目录 |
+| `vision_debug_log` / `vision_debug_log_period_s` | false / 0.5 | 映射到节点 `debug_log` / `debug_log_period_s` |
+
+离线几何与坐标测试（不需要 ROS/PX4）：
+
+```bash
+uv run python tests/test_camera_geometry.py
+```
+
+truth 只是 odometry 参考位置的自洽旁路，**不验证渲染、目标识别、图像同步或 YOLO 精度**；真实图像外参验证需要独立观测，目前未验证。时间同步、FOV 丢失处理和视觉闭环均在后续计划中。
+
 ## 可选算法和场景
 
 算法：

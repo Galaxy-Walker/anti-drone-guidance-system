@@ -35,3 +35,39 @@ guidance_node_2d:
     debug_log: false
     debug_log_period_s: 0.2
     startup_log_period_s: 1.0
+
+# 视觉 truth 旁路节点：默认关闭，不影响现有导引启动方式。
+# 本轮只支持 vision_source=off/truth；节点不消费图像、不控制飞机。
+vision_adapter:
+  ros__parameters:
+    vision_source: off
+    pursuer_namespace: /px4_1
+    target_namespace: /px4_2
+
+    # P1 核验后填写的桥接光学系 frame；与 camera_bridge.yaml 的 frame_id 一致。
+    camera_frame_id: camera_link_optical
+
+    # 目标控制高度映射到公共 ENU 平面；两机原点不一致时不能直接复用该数值。
+    target_base_altitude: 1.0
+
+    # 相机 link 相对机体 FLU 的安装平移和安装旋转（rpy 单位：度）。
+    # 标称值来自 PX4 x500_mono_cam_down 的 SDF 合并结果，完整链见计划 §4.1。
+    camera_mount_xyz: [0.0, 0.0, 0.10]
+    camera_mount_rpy_deg: [0.0, 90.0, 0.0]
+
+    # truth 伪检测使用独立定时器，不要求与图像同频。
+    truth_rate_hz: 10.0
+
+    # 接收时间新鲜度和两机配对容差；本轮是近似，不宣称采样同步。
+    pose_timeout_s: 0.2
+    pose_pair_tolerance_s: 0.05
+
+    # 协方差假设：像素噪声和目标平面高度不确定度，不代表实际添加了随机噪声。
+    pixel_noise_px: 3.0
+    target_plane_sigma_m: 0.1
+
+    vision_record_data: true
+    vision_record_output_dir: outputs/gazebo2d_vision
+
+    debug_log: false
+    debug_log_period_s: 0.5

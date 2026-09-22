@@ -556,6 +556,40 @@ uv run plot_gazebo_csv.py \
 
 `plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。
 
+### 11.5 下视相机与视觉 truth 旁路（旁路基础设施）
+
+本轮为后续视觉接入搭好旁路基础设施，**导引闭环不消费视觉量测**：
+
+- 追踪机使用 PX4 自带 `x500_mono_cam_down`（airframe 4014）下视单目相机；目标机（`4001/gz_x500`、`-i 1`、`/px4_2`）不变。
+- `ros_gz_bridge` 按固定 `config/camera_bridge.yaml` 桥接 `/camera/image_raw` 与 `/camera/camera_info`；gz 话题名和 frame 已在 P1 核验。
+- `vision_adapter`（`vision_source:=truth`）订阅两机 odometry 和 `CameraInfo`，用完整机体姿态加安装外参构造相机位姿，把目标机 odometry 参考位置投影成伪检测，再由同一处理函数反投影成位置量测。
+- 输出 `/camera/detections_truth`、`/vision/target_pose`（frame=`enu`）和 `outputs/gazebo2d_vision/vision_samples.csv`。
+
+几何与时间约定：公共世界系为 ENU，相机光学系为 x 右、y 下、z 前；安装平移和旋转指相机 link 相对机体 FLU。标称安装参数为平移 `[0, 0, 0.10]` m、rpy `[0, 90°, 0]`，来自 PX4 SDF 合并结果与实际运行核验。本轮用系统时间和单调接收时间做近邻配对，伪检测时间戳是生成时刻而不是图像采集时刻；truth 只验证几何往返和消息封装，不验证渲染、识别、图像同步或 YOLO 精度。
+
+启动与验收（Gazebo、PX4 SITL、XRCE Agent、QGC 仍由使用者在外部终端启动）：
+
+```bash
+# 外部终端：追踪机改用 airframe 4014，自带下视相机
+cd ~/PX4-Autopilot
+PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="0,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 ./build/px4_sitl_default/bin/px4 -i 0
+
+# 仓库终端：桥接 + 导引 + truth 旁路
+ros2 launch gazebosimulation2d guidance.launch.py enable_camera:=true vision_source:=truth
+ros2 topic hz /camera/image_raw
+ros2 topic echo --once /camera/camera_info
+ros2 run rqt_image_view rqt_image_view /camera/image_raw
+```
+
+离线几何与坐标测试（不依赖 ROS/PX4）：
+
+```bash
+cd 7_2Dsimulation
+uv run python tests/test_camera_geometry.py
+```
+
+真实图像外参验证需要独立图像观测（静态标记、独立像素测量和受控悬停），目前未验证；未完成前不应报告真实视觉误差指标。标注图、YOLO 运行模式、多目标跟踪和视觉闭环均不在本轮范围内。
+
 ## 12. Gazebo/PX4 25s 闭环仿真结果
 
 本节结果来自当前仓库中的 Gazebo/PX4 闭环记录：
@@ -613,7 +647,7 @@ outputs/gazebo2d/circle/total/
 
 - 当前模型是二维定高俯瞰追踪，不能反映完整三维机动、爬升下降或姿态动力学。
 - 追踪机和目标虽然保存 `[x, y, z]` 状态，但导引与指标只使用 XY 分量。
-- 当前版本不建模深度相机、有限视场、遮挡、检测延迟、误检漏检和目标丢失预测。
+- 当前导引不建模深度相机、有限视场、遮挡、检测延迟、误检漏检和目标丢失预测；本轮桥接的下视相机与 truth 旁路只是基础设施，导引仍不消费视觉量测，也未实现 YOLO、图像同步和视觉闭环。
 - yaw 只表示水平机头朝向，不包含完整 roll/pitch/yaw 姿态动力学。
 - 离线仿真采用质点模型，Gazebo 结果会受到 PX4 底层控制器、机体模型、setpoint 跟踪误差和通信频率影响。
 - 当前 Gazebo 追踪阶段不再通过 position setpoint 强制拉住追踪机高度，而是发布 z 速度和 z 加速度为 0 的 velocity + acceleration setpoint；实际高度保持效果取决于 PX4 底层控制器与机体响应。
