@@ -62,16 +62,24 @@
 - 没有检测节点；`vision_adapter` 不支持 yolo；`/clock` 未桥接；guidance 没有 `target_source` 开关；
 - 没有目标估计器与 coast/hold 状态机；没有视觉指标与绘图；Gazebo 合成图的检测可行性未验证。
 
-### 2.3 本机核查结果（实施前必须复核）
+### 2.3 本机核查结果（2026-09-26 复核）
 
 | 项 | 结果 |
 | --- | --- |
 | ROS 2 Jazzy、`ros-jazzy-cv-bridge`、`ros-jazzy-rqt-image-view` | 已安装 |
-| `ros-jazzy-vision-msgs`、`ros-jazzy-ros-gz-bridge` | **未安装**（apt 候选 4.1.1 / 1.0.24，需 `sudo apt install`） |
-| Gazebo、PX4-Autopilot | **本机（src-desktop）不存在**；闭环验收须在装有 PX4 v1.16 + Gazebo Harmonic 的机器上执行 |
-| conda 环境 `ultralytics` | py3.11 + torch 2.11.0+cu128 + tensorrt 10.16，`torch.cuda.is_available()=True`（RTX PRO 5000 48 GB） |
-| 检测权重 | `runs/detect/yolo26_caa_p3_dysample_detfly/weights/{best.pt,best.engine,best.onnx}`，以及 baseline 同套；TRT 引擎为本机编译 |
-| 数据集 | Det-Fly：真实天空背景侧视小目标；与 Gazebo 俯视渲染存在域差异（见 P3/P7） |
+| `ros-jazzy-vision-msgs`、`ros-jazzy-ros-gz-bridge` | 已安装（4.1.1 / 1.0.24，`ros2 pkg prefix` 验证；`ros-gz-interfaces` 随依赖装入） |
+| Gazebo Harmonic | gz-sim 8.15.0，`sensors-system` 与 `gz-rendering8-ogre2` 齐全；已用自建世界实测相机出图（1280×960）与 `/clock` 发布 |
+| PX4-Autopilot | `/home/srcbit/anti-drone/PX4-Autopilot`（`release/1.16`，`v1.16.2-9-g8714f2442a`），25 个子模块完整，`x500_mono_cam_down`/`x500` 模型与 `4001/4014` airframe 均在；SITL 已编译（`build/px4_sitl_default/bin/px4`，2026-09-26） |
+| MicroXRCEAgent | 已安装 v3.0.2（`/usr/local/bin/MicroXRCEAgent`；源码在 `/home/srcbit/anti-drone/Micro-XRCE-DDS-Agent`） |
+| QGroundControl | 已安装 AppImage：`/home/srcbit/anti-drone/QGroundControl-x86_64.AppImage` |
+| 构建依赖 / 工具 | `ninja` 1.11.1、cmake、gcc/g++-multilib、ccache 等已就位；仅 `exiftool` 未装（SITL 编译不需要） |
+| `uv` | **未安装**；根项目 `.venv` 未建立，纯 Python 侧的 `uv sync` / `uv run`（P4 单测与绘图）前需先安装 |
+| conda 环境 `ultralytics` | py3.11.16 + torch 2.11.0+cu128 + tensorrt 10.16.1.11，`torch.cuda.is_available()=True`（RTX PRO 5000 48 GB） |
+| 检测权重 | `runs/detect/yolo26_caa_p3_dysample_detfly/weights/{best.pt,best.engine,best.onnx}`，以及 baseline 同套；`best.engine` 已实测可加载并在 GPU 上推理 |
+| 数据集 | Det-Fly 位于 `/home/srcbit/Det-Fly-YOLO-1third`（约 11 GB）：真实天空背景侧视小目标；与 Gazebo 俯视渲染存在域差异（见 P3/P7） |
+| 系统 Python | `/usr/bin/python3` 为 3.12，`rclpy`/`cv2` 可导入；已装 ROS 节点 shebang 为 `/usr/bin/python3` |
+
+结论：P0 所需的系统环境已具备；剩余一次性补齐项为安装 `uv`。
 
 ## 3. 关键设计决策
 
@@ -170,7 +178,7 @@ $$\hat p_k^-=\hat p_{k-1}+\hat v_{k-1}\Delta t,\qquad
 
 ### P0 环境与桥接就绪（前置阻塞项）
 
-1. `sudo apt install ros-jazzy-vision-msgs ros-jazzy-ros-gz-bridge`，用 `ros2 pkg prefix` 验证。
+1. 复核前置 ROS 包已安装：`ros-jazzy-vision-msgs`、`ros-jazzy-ros-gz-bridge`（2026-09-26 已用 `ros2 pkg prefix` 验证）；缺失环境用 `sudo apt install` 补齐。
 2. `config/camera_bridge.yaml` 增加 `/clock` 桥接条目。
 3. 相机与时钟验收：
 
@@ -253,10 +261,11 @@ gz stats
 ### P6 Gazebo 闭环验收
 
 外部终端（按 `README.md`）：QGC、追踪机 `4014 x500_mono_cam_down`、目标机 `4001 x500`、`MicroXRCEAgent udp4 -p 8888`。
-追踪机 spawn 在目标场景起点正上方，示例（circle 起点 `(47, 0)`）：
+追踪机 spawn 在目标场景起点正上方，示例（circle 起点 `(47, 0)`）；本机 SITL 已编译（新环境首次运行前需
+`make px4_sitl gz_x500_mono_cam_down`）：
 
 ```bash
-cd ~/PX4-Autopilot
+cd /home/srcbit/anti-drone/PX4-Autopilot
 PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
   ./build/px4_sitl_default/bin/px4 -i 0
 # 另一终端：目标机 4001/gz_x500，-i 1，/px4_2，spawn 在 (47, 0)
