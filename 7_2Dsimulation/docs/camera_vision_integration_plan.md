@@ -1,8 +1,8 @@
 # 7_2Dsimulation 下视相机与视觉接口接入计划
 
 > 状态：本轮 P1 桥接核验、P2 纯几何与 P3 truth 适配器已实现；P2/P3 通过离线与回放级验证，
-> P1 已用无头 Gazebo 实测话题名与相机参数并跑通仓库桥接。
-> 尚未完成：完整双机 Offboard + 相机的运行复验、RTF 记录和真实图像外参验证。
+> P1 已在无头 Gazebo 完成实测：话题名、桥接 frame/编码/内参、RTF 与图像朝向均已记录（见 §3.3 实测记录）。
+> 尚未完成：完整双机 Offboard + 相机的运行复验、真实图像外参验证（相机无头渲染为软件路径，实测约 13–15 Hz）。
 > 目标环境：ROS 2 Jazzy + PX4 v1.16 SITL + Gazebo Harmonic（gz-sim 8）。模型、消息和桥接能力以本机安装版本核验结果为准。
 
 ## 1. 范围与决策
@@ -116,6 +116,22 @@ ros2 run rqt_image_view rqt_image_view /camera/image_raw
 
 记录桥接版本、实际话题、frame、编码、K/D、分辨率和 Gazebo RTF。30 Hz 是仿真时间频率，RTF 不足 1 时壁钟观测频率可能不足 30 Hz。验证画面确实朝下；本轮不发布 TF。
 
+**P1 实测记录（2026-09-26，无头 Gazebo）**
+
+| 项 | 实测值 |
+| --- | --- |
+| 环境 | ROS 2 Jazzy；`ros_gz_bridge` 1.0.24；`vision_msgs` 4.1.1；`rqt_image_view` 1.3.0；gz-sim 8.15.0；PX4 v1.16 + airframe 4014 |
+| 模型实例 | `x500_mono_cam_down_0`（`PX4_GZ_MODEL_POSE="0,0,0,0,0,0"`、`-i 0`，`HEADLESS=1`） |
+| gz 话题 | `/world/default/model/x500_mono_cam_down_0/link/camera_link/sensor/imager/{image,camera_info}`，与 `camera_bridge.yaml` 一致 |
+| 桥接配置键 | 本机 1.0.24 同时支持逐桥接 `frame_id` 与 `qos_profile`、`lazy`，不需要退回节点级 `override_frame_id` |
+| ROS frame | 两条桥接都覆盖为 `camera_link_optical`（Gazebo 原始 frame 为 `x500_mono_cam_down_0::camera_link::imager`） |
+| 编码与尺寸 | `rgb8`、1280×960、`step=3840`、`is_bigendian=0` |
+| 内参 | $f_x=539.9363$、$f_y=539.9364$、$c_x=640$、$c_y=480$；`plumb_bob` 畸变 D 全 0；与离线模型 $W/2/\tan(\theta_{hfov}/2)\approx539.94$ 一致 |
+| 安装外参 | camera link 位于机体参考点上方 `[0, 0, 0.10]` m、绕 y 轴 90°，与默认参数一致；分解后的 $R_{W\leftarrow C}$ 与 §4.1 标称矩阵一致 |
+| 图像频率与 RTF | 30 Hz 是无相机负载下的仿真时间设定值；本机无头渲染走软件 EGL 路径，实测约 13–15 Hz（与是否经桥接无关），此时 RTF≈1.00，瓶颈在渲染而非物理步进 |
+| 朝向 | 追踪机抬至 1.5 m 且正下方铺 3×3 m 红色平板时整帧为红色；地面已知标记的像素方向比与 `ground_to_pixel` 预测一致（偏差 0.2%），尺度与相机在参考点上方 0.10 m 的假设一致。静止时相机距地面约 0.08 m，小于 0.1 m 近裁剪面，画面为单位灰色背景，属正常现象 |
+| 风险记录 | 用 `gz topic -e` 直接订阅图像话题会拖慢渲染并撑大 gz sim 进程（本次约 16 min 后 RSS 达 46 GB 被 OOM 杀死）；核验图像应经 `ros_gz_bridge` + ROS 订阅，长时间实验分段重启仿真 |
+
 ## 4. P2：纯几何模块
 
 ### 4.1 坐标与外参
@@ -210,6 +226,8 @@ ROS 坐标边界在 `coordinates.py` 新增完整姿态转换函数，保留现�
 cd 7_2Dsimulation
 uv run python tests/test_camera_geometry.py
 ```
+
+2026-09-26 复核：21 个用例全部通过（`Ran 21 tests ... OK`），覆盖水平/倾斜往返、非零安装平移、各向异性焦距与偏置主点、非零目标平面、越界/近平行/非有限输入、非法四元数、雅可比有限差分对照以及完整姿态转换的基向量与行列式检查。
 
 覆盖：水平往返误差 < 1e-6 m、非零平移、yaw/roll/pitch、不同 `fx/fy` 和偏置主点、非零目标平面高度、射线朝天/近平行、越界与非有限输入、非法四元数和 frame。雅可比与中心有限差分比较；完整姿态转换检查正交性、行列式及 FLU 三个基向量，不能只比 yaw。
 

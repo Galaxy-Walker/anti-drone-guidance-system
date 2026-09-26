@@ -187,7 +187,9 @@ ros2 run rqt_image_view rqt_image_view /camera/image_raw
 gz stats   # 记录 RTF；RTF 不足 1 时壁钟帧率会低于 30 Hz
 ```
 
-已核验：相机 link 相对机体的安装平移为 `(0, 0, 0.10)` m、绕 y 轴 90°；Gazebo 相机为 1280×960、水平 FOV 1.74 rad、30 Hz、RGB_INT8；桥接 `frame_id` 覆盖为 `camera_link_optical`。30 Hz 是仿真时间频率，RTF 不足 1 时壁钟观测频率会更低。
+已核验（2026-09-26，无头 Gazebo 实测）：相机 link 相对机体的安装平移为 `(0, 0, 0.10)` m、绕 y 轴 90°（光轴朝下）；Gazebo 相机为 1280×960、水平 FOV 1.74 rad、RGB_INT8，桥接输出 `rgb8`；`CameraInfo` 内参 `K=[539.936, 0, 640; 0, 539.936, 480]`、畸变 D 全 0、frame 覆盖为 `camera_link_optical`（`ros_gz_bridge` 1.0.24 支持逐桥接 `frame_id`/`qos_profile`/`lazy`）。
+
+30 Hz 是无相机负载下的仿真时间设定值。本机无头渲染走软件 EGL 路径，实测约 13–15 Hz，此时 RTF≈1.00，瓶颈在渲染而不是物理步进。图像核验请通过 `/camera/image_raw` 订阅（`ros2 topic hz` 自带 sensor data QoS，可直接测速）；**不要用 `gz topic -e` 直接订阅图像话题**，实测会拖慢渲染并撑大 gz sim 进程直至 OOM。
 
 输出：
 
