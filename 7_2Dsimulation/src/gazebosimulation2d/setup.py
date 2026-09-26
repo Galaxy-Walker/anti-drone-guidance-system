@@ -13,6 +13,7 @@ setup(
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/config", ["config/default.yaml", "config/camera_bridge.yaml"]),
         (f"share/{package_name}/launch", ["launch/guidance.launch.py"]),
+        (f"share/{package_name}/scripts", ["scripts/yolo_worker.py"]),
     ],
     install_requires=["setuptools"],
     # colcon 只有看到 pytest 测试依赖时才用 pytest 运行 test/（否则退化为无参数的 unittest）。
@@ -26,6 +27,7 @@ setup(
         "console_scripts": [
             "guidance_node = gazebosimulation2d.guidance_node:main",
             "vision_adapter = gazebosimulation2d.vision_adapter:main",
+            "vision_detector = gazebosimulation2d.vision_detector:main",
         ],
     },
 )

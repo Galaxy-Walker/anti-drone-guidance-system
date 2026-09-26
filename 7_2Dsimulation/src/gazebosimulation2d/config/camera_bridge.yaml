@@ -22,3 +22,11 @@
   qos_profile: SENSOR_DATA
   frame_id: camera_link_optical
   lazy: true
+# /clock：视觉链路 use_sim_time 的唯一时间源；CLOCK 对应 BEST_EFFORT + depth 1。
+# 该条目必须保持非 lazy，仿真暂停时也要让节点时钟可被监督。
+- ros_topic_name: /clock
+  gz_topic_name: /clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
+  qos_profile: CLOCK

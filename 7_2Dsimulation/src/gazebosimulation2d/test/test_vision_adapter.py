@@ -17,6 +17,7 @@ colcon test --packages-select gazebosimulation2d && colcon test-result --verbose
 from __future__ import annotations
 
 import csv
+import math
 import time
 
 import numpy as np
@@ -25,6 +26,7 @@ import rclpy
 from px4_msgs.msg import VehicleOdometry
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import CameraInfo
+from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
 from gazebosimulation2d.vision_adapter import (
     CSV_FIELDS,
@@ -111,7 +113,7 @@ class TestParameters:
 
     def test_unsupported_source_is_rejected(self) -> None:
         with pytest.raises(ValueError):
-            VisionAdapter([Parameter("vision_source", value="yolo")])
+            VisionAdapter([Parameter("vision_source", value="radar")])
 
     def test_off_source_is_rejected_when_started(self) -> None:
         with pytest.raises(ValueError):
@@ -402,3 +404,328 @@ class TestRecording:
             adapter.destroy_node()
 
         assert not (tmp_path / "vision_samples.csv").exists()
+
+
+# --------------------------------------------------------------------- yolo
+
+YOLO_PURSUER_POSITION_NED = (0.0, 0.0, -8.0)
+YOLO_TARGET_POSITION_NED = (4.0, 3.0, -1.0)
+FX = 539.9363
+FY = 539.9363
+CX = 640.0
+CY = 480.0
+
+
+def make_detection_message(
+    stamp_ns: int,
+    detections: list[tuple[float, float, float, float, float]] | None = None,
+    frame_id: str = "camera_link_optical",
+) -> Detection2DArray:
+    message = Detection2DArray()
+    message.header.stamp.sec = stamp_ns // 1_000_000_000
+    message.header.stamp.nanosec = stamp_ns % 1_000_000_000
+    message.header.frame_id = frame_id
+    for u, v, w, h, score in detections or []:
+        detection = Detection2D()
+        detection.header = message.header
+        detection.bbox.center.position.x = float(u)
+        detection.bbox.center.position.y = float(v)
+        detection.bbox.size_x = float(w)
+        detection.bbox.size_y = float(h)
+        hypothesis = ObjectHypothesisWithPose()
+        hypothesis.hypothesis.class_id = "drone"
+        hypothesis.hypothesis.score = float(score)
+        detection.results.append(hypothesis)
+        message.detections.append(detection)
+    return message
+
+
+@pytest.fixture
+def yolo_node(monkeypatch, tmp_path):
+    adapter = VisionAdapter([
+        Parameter("vision_source", value="yolo"),
+        Parameter("use_sim_time", value=True),
+        Parameter("vision_record_output_dir", value=str(tmp_path)),
+        Parameter("dataset_output_dir", value=str(tmp_path / "dataset")),
+    ])
+    # 测试直接调用回调，不走 spin；关掉 /clock 启动防呆，避免慢环境下误触发 shutdown。
+    adapter._sim_clock_guard = None
+    clock = {"ns": 0}
+    monkeypatch.setattr(adapter, "_sim_now_ns", lambda: clock["ns"])
+    adapter._test_clock = clock
+    yield adapter
+    adapter.destroy_node()
+
+
+def push_pursuer_pose(
+    adapter: VisionAdapter,
+    t_sim_ns: int,
+    position_ned=YOLO_PURSUER_POSITION_NED,
+    velocity_ned=(0.0, 0.0, 0.0),
+    quaternion: list[float] | None = None,
+) -> None:
+    adapter._test_clock["ns"] = t_sim_ns
+    message = make_odometry(position_ned, quaternion)
+    message.velocity = [float(value) for value in velocity_ned]
+    adapter._pursuer_odometry_callback(message)
+
+
+def prime_yolo_inputs(adapter: VisionAdapter, t_sim_ns: int = 1_000_000_000) -> None:
+    adapter._camera_info_callback(make_camera_info())
+    adapter._target_odometry_callback(make_odometry(YOLO_TARGET_POSITION_NED))
+    push_pursuer_pose(adapter, t_sim_ns)
+
+
+def truth_pixel(target_enu, camera_position_enu) -> tuple[float, float]:
+    """按解析公式独立计算像素，避免测试复用被测代码。"""
+    relative = np.asarray(target_enu, dtype=float) - np.asarray(camera_position_enu, dtype=float)
+    depth = -relative[2]
+    return (
+        CX + FX * relative[0] / depth,
+        CY - FY * relative[1] / depth,
+    )
+
+
+class TestYoloParameters:
+    def test_yolo_requires_sim_time(self) -> None:
+        with pytest.raises(ValueError):
+            VisionAdapter([Parameter("vision_source", value="yolo")])
+
+    def test_min_score_bounds_are_checked(self) -> None:
+        with pytest.raises(ValueError):
+            VisionAdapter([
+                Parameter("vision_source", value="yolo"),
+                Parameter("use_sim_time", value=True),
+                Parameter("min_score", value=1.5),
+            ])
+
+
+class TestYoloMeasurement:
+    def test_measurement_uses_image_stamp_and_detection_center(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        u, v = truth_pixel((3.0, 4.0, 1.0), (0.0, 0.0, 8.1))
+        stamp_ns = 1_010_000_000
+        # 处理时刻比图像 stamp 晚 40 ms，用于锁定 detection_age_ms 的单位。
+        yolo_node._test_clock["ns"] = stamp_ns + 40_000_000
+        yolo_node._detections_callback(make_detection_message(stamp_ns, [(u, v, 20.0, 10.0, 0.9)]))
+
+        record = yolo_node._records[-1]
+        assert record.valid
+        assert record.source == "yolo"
+        assert record.image_stamp_s == pytest.approx(1.01)
+        assert record.detection_age_ms == pytest.approx(40.0)
+        assert record.u_ref == pytest.approx(u)
+        assert record.v_ref == pytest.approx(v)
+        assert record.target_x_est == pytest.approx(3.0, abs=1e-6)
+        assert record.target_y_est == pytest.approx(4.0, abs=1e-6)
+        assert record.score == pytest.approx(0.9)
+        assert record.bbox_w == pytest.approx(20.0)
+        assert record.bbox_h == pytest.approx(10.0)
+        assert record.n_detections == 1.0
+        # 单样本缓存用最近邻：10 ms 匹配差，未插值。
+        assert record.pose_match_dt_ms == pytest.approx(10.0)
+        assert record.pose_interpolated == 0.0
+        # 检测中心由同一真值像素构造，两项误差都应接近 0。
+        assert record.position_error_vs_odom_m == pytest.approx(0.0, abs=1e-6)
+        assert record.pixel_error_vs_truth_px == pytest.approx(0.0, abs=1e-6)
+        assert record.position_roundtrip_error_m == pytest.approx(0.0, abs=1e-6)
+
+    def test_pose_is_interpolated_at_image_stamp(self, yolo_node: VisionAdapter) -> None:
+        yolo_node._camera_info_callback(make_camera_info())
+        yolo_node._target_odometry_callback(make_odometry(YOLO_TARGET_POSITION_NED))
+        # 位姿样本间隔 40 ms（< pose_match_tolerance_s=50 ms），模拟 25 Hz odometry。
+        push_pursuer_pose(yolo_node, 1_000_000_000, position_ned=(0.0, 0.0, -8.0))
+        # ENU 北向平移 0.2 m：NED n=0.2 -> ENU y=0.2。
+        push_pursuer_pose(yolo_node, 1_040_000_000, position_ned=(0.2, 0.0, -8.0))
+
+        u, v = truth_pixel((3.0, 4.0, 1.0), (0.0, 0.1, 8.1))
+        yolo_node._detections_callback(make_detection_message(1_020_000_000, [(u, v, 20.0, 10.0, 0.9)]))
+
+        record = yolo_node._records[-1]
+        assert record.valid
+        assert record.pose_interpolated == 1.0
+        assert record.pose_match_dt_ms == pytest.approx(0.0)
+        assert record.target_x_est == pytest.approx(3.0, abs=1e-6)
+        assert record.target_y_est == pytest.approx(4.0, abs=1e-6)
+
+    def test_future_image_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._detections_callback(make_detection_message(1_200_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        record = yolo_node._records[-1]
+        assert not record.valid
+        assert record.invalid_reason == "pose_cache_future"
+
+    def test_stale_image_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        push_pursuer_pose(yolo_node, 1_100_000_000)
+        yolo_node._detections_callback(make_detection_message(900_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        assert yolo_node._records[-1].invalid_reason == "pose_cache_stale"
+
+    def test_gap_between_pose_samples_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        push_pursuer_pose(yolo_node, 1_300_000_000)
+        yolo_node._detections_callback(make_detection_message(1_150_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        assert yolo_node._records[-1].invalid_reason == "pose_cache_miss"
+
+    def test_missing_pose_cache_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        yolo_node._camera_info_callback(make_camera_info())
+        yolo_node._detections_callback(make_detection_message(1_000_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        assert yolo_node._records[-1].invalid_reason == "no_pursuer_odometry"
+
+    def test_missing_camera_info_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._camera_intrinsics = None
+        yolo_node._camera_info_reason = "no_camera_info"
+        yolo_node._detections_callback(make_detection_message(1_010_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        assert yolo_node._records[-1].invalid_reason == "no_camera_info"
+
+    def test_low_score_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._detections_callback(make_detection_message(1_010_000_000, [(640.0, 480.0, 20.0, 10.0, 0.1)]))
+        record = yolo_node._records[-1]
+        assert record.invalid_reason == "low_score"
+        assert record.score == pytest.approx(0.1)
+
+    def test_empty_detections_are_recorded(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._detections_callback(make_detection_message(1_010_000_000, []))
+        record = yolo_node._records[-1]
+        assert record.invalid_reason == "no_drone_detection"
+        assert record.n_detections == 0.0
+        assert not record.valid
+
+    def test_best_scoring_detection_wins(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        u, v = truth_pixel((3.0, 4.0, 1.0), (0.0, 0.0, 8.1))
+        yolo_node._detections_callback(
+            make_detection_message(1_010_000_000, [(10.0, 20.0, 4.0, 4.0, 0.4), (u, v, 20.0, 10.0, 0.95)])
+        )
+        record = yolo_node._records[-1]
+        assert record.valid
+        assert record.score == pytest.approx(0.95)
+        assert record.u_ref == pytest.approx(u)
+
+    def test_out_of_view_detection_is_rejected(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._detections_callback(make_detection_message(1_010_000_000, [(5000.0, 480.0, 20.0, 10.0, 0.9)]))
+        assert yolo_node._records[-1].invalid_reason == "backprojection_failed"
+
+    def test_wrong_class_is_ignored(self, yolo_node: VisionAdapter) -> None:
+        prime_yolo_inputs(yolo_node)
+        message = make_detection_message(1_010_000_000, [])
+        detection = Detection2D()
+        detection.header = message.header
+        detection.bbox.center.position.x = 640.0
+        detection.bbox.center.position.y = 480.0
+        detection.bbox.size_x = 20.0
+        detection.bbox.size_y = 10.0
+        hypothesis = ObjectHypothesisWithPose()
+        hypothesis.hypothesis.class_id = "bird"
+        hypothesis.hypothesis.score = 0.99
+        detection.results.append(hypothesis)
+        message.detections.append(detection)
+        yolo_node._detections_callback(message)
+        assert yolo_node._records[-1].invalid_reason == "no_drone_detection"
+
+
+class TestYoloRecording:
+    def test_yolo_csv_has_extended_fields(self, yolo_node: VisionAdapter, tmp_path) -> None:
+        prime_yolo_inputs(yolo_node)
+        yolo_node._detections_callback(make_detection_message(1_010_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        yolo_node.save_recording()
+
+        with (tmp_path / "vision_samples.csv").open(newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            assert reader.fieldnames == list(CSV_FIELDS)
+            row = next(reader)
+        assert row["source"] == "yolo"
+        assert float(row["image_stamp_s"]) == pytest.approx(1.01)
+        assert float(row["score"]) == pytest.approx(0.9)
+        assert float(row["n_detections"]) == 1.0
+        assert float(row["pose_interpolated"]) == 0.0
+
+    def test_truth_rows_keep_new_fields_nan(self, tmp_path) -> None:
+        adapter = VisionAdapter([
+            Parameter("vision_source", value="truth"),
+            Parameter("vision_record_output_dir", value=str(tmp_path)),
+        ])
+        try:
+            prime_valid_inputs(adapter)
+            adapter._on_timer()
+            adapter.save_recording()
+        finally:
+            adapter.destroy_node()
+
+        with (tmp_path / "vision_samples.csv").open(newline="", encoding="utf-8") as file:
+            row = next(csv.DictReader(file))
+        assert row["source"] == "truth"
+        for field in (
+            "image_stamp_s",
+            "detection_age_ms",
+            "pose_match_dt_ms",
+            "pose_interpolated",
+            "score",
+            "bbox_w",
+            "bbox_h",
+            "n_detections",
+            "pixel_error_vs_truth_px",
+            "position_error_vs_odom_m",
+        ):
+            assert math.isnan(float(row[field])), field
+
+    def test_dataset_label_is_written_for_valid_frame(self, tmp_path) -> None:
+        adapter = VisionAdapter([
+            Parameter("vision_source", value="yolo"),
+            Parameter("use_sim_time", value=True),
+            Parameter("vision_record_output_dir", value=str(tmp_path)),
+            Parameter("dataset_output_dir", value=str(tmp_path / "dataset")),
+            Parameter("record_dataset", value=True),
+        ])
+        clock = {"ns": 0}
+        adapter._sim_now_ns = lambda: clock["ns"]
+        adapter._sim_clock_guard = None
+        try:
+            adapter._camera_info_callback(make_camera_info())
+            adapter._target_odometry_callback(make_odometry(YOLO_TARGET_POSITION_NED))
+            clock["ns"] = 1_000_000_000
+            adapter._pursuer_odometry_callback(make_odometry(YOLO_PURSUER_POSITION_NED))
+            u, v = truth_pixel((3.0, 4.0, 1.0), (0.0, 0.0, 8.1))
+            adapter._detections_callback(make_detection_message(1_010_000_000, [(u, v, 20.0, 10.0, 0.9)]))
+        finally:
+            adapter.destroy_node()
+
+        labels = list((tmp_path / "dataset" / "labels").glob("*.txt"))
+        assert len(labels) == 1
+        assert labels[0].name == "1010000000.txt"
+        fields = labels[0].read_text(encoding="utf-8").split()
+        assert len(fields) == 5
+        assert fields[0] == "0"
+        center_u, center_v, norm_w, norm_h = (float(value) for value in fields[1:])
+        assert center_u == pytest.approx(u / 1280.0, abs=0.02)
+        assert center_v == pytest.approx(v / 960.0, abs=0.02)
+        # 目标盒 0.35 m 在 7.1 m 高度约 27 px；含斜视视差、3D 角点和 8% margin 后会更大，
+        # 这里只断言量级正确，不把“同一几何模型”的数值当成独立标定。
+        assert 0.015 < norm_w < 0.05
+        assert 0.015 < norm_h < 0.05
+        assert 0.8 < (norm_w * 1280.0) / (norm_h * 960.0) < 1.25
+
+    def test_dataset_label_skipped_without_truth(self, tmp_path) -> None:
+        adapter = VisionAdapter([
+            Parameter("vision_source", value="yolo"),
+            Parameter("use_sim_time", value=True),
+            Parameter("vision_record_output_dir", value=str(tmp_path)),
+            Parameter("dataset_output_dir", value=str(tmp_path / "dataset")),
+            Parameter("record_dataset", value=True),
+        ])
+        clock = {"ns": 0}
+        adapter._sim_now_ns = lambda: clock["ns"]
+        adapter._sim_clock_guard = None
+        try:
+            adapter._camera_info_callback(make_camera_info())
+            clock["ns"] = 1_000_000_000
+            adapter._pursuer_odometry_callback(make_odometry(YOLO_PURSUER_POSITION_NED))
+            adapter._detections_callback(make_detection_message(1_010_000_000, [(640.0, 480.0, 20.0, 10.0, 0.9)]))
+        finally:
+            adapter.destroy_node()
+
+        assert not (tmp_path / "dataset" / "labels").exists()

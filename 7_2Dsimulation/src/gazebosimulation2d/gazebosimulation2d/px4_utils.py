@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Sequence
 
 from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
@@ -12,8 +13,13 @@ def namespaced_topic(namespace: str, suffix: str) -> str:
     return f"/{namespace.strip('/')}/{suffix.lstrip('/')}"
 
 
-def timestamp_us(node) -> int:
-    return int(node.get_clock().now().nanoseconds // 1000)
+def timestamp_us() -> int:
+    """PX4 输入消息的 `timestamp` 用宿主墙钟，与节点 `use_sim_time` 解耦。
+
+    PX4 只把该字段当消息时间标记，不参与 Offboard 控制律；默认
+    `use_sim_time=false` 时与旧实现（ROS 系统时间）行为等价。
+    """
+    return time.time_ns() // 1000
 
 
 def offboard_control_mode(
