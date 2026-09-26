@@ -1,6 +1,9 @@
 # 7_2Dsimulation YOLO 视觉闭环仿真接入计划
 
-> 状态：待实施。本计划接续 `docs/camera_vision_integration_plan.md` 已完成的 P1–P3（相机桥接、纯几何、truth 旁路），把
+> 状态：P0–P5 已实现（P0 环境核查、P1 检测节点与 worker、P2 适配器 yolo 模式、P3 离线评估工具、
+> P4 α-β 估计器、P5 导引闭环接线；代码与离线测试见 `docs/yolo_vision_closed_loop_results.md`）。
+> 待闭环实测：P3 零样本门槛的 Gazebo 数据采集与结论、P6 验收记录、P7（仅 P3 不达标时）、P8 结果表与提交。
+> 本计划接续 `docs/camera_vision_integration_plan.md` 已完成的 P1–P3（相机桥接、纯几何、truth 旁路），把
 > `/home/srcbit/anti-drone/ultralytics-main` 的 YOLO26 检测器接入 `7_2Dsimulation` 的 PX4/Gazebo 闭环。
 >
 > 本轮任务定义：**追踪机全程保持在目标机正上方**，目标始终位于下视相机足印内；导引输入使用机载相机的视觉估计，
@@ -265,11 +268,21 @@ gz stats
 `make px4_sitl gz_x500_mono_cam_down`）：
 
 ```bash
+# 终端 1：Micro XRCE-DDS Agent
+MicroXRCEAgent udp4 -p 8888
+
+# 终端 2：追踪机（4014 = x500_mono_cam_down，实例 0，/px4_1；无显示器时 HEADLESS=1）
 cd /home/srcbit/anti-drone/PX4-Autopilot
-PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
+HEADLESS=1 PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
   ./build/px4_sitl_default/bin/px4 -i 0
-# 另一终端：目标机 4001/gz_x500，-i 1，/px4_2，spawn 在 (47, 0)
+# 等 "Gazebo world is ready" 后再启动终端 3
+
+# 终端 3：目标机（4001 = x500，实例 1，/px4_2，同位置；PX4_GZ_STANDALONE=1 复用终端 2 的 Gazebo）
+PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_2 \
+  ./build/px4_sitl_default/bin/px4 -i 1
 ```
+
+不要额外传 `PX4_SIM_MODEL`（会覆盖 4014 的相机模型）；模型实例名为 `x500_mono_cam_down_0` / `x500_1`。
 
 launch：
 

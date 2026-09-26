@@ -3,6 +3,7 @@
 > 状态：本轮 P1 桥接核验、P2 纯几何与 P3 truth 适配器已实现；P2/P3 通过离线与回放级验证，
 > P1 已在无头 Gazebo 完成实测：话题名、桥接 frame/编码/内参、RTF 与图像朝向均已记录（见 §3.3 实测记录）。
 > 尚未完成：完整双机 Offboard + 相机的运行复验、真实图像外参验证（相机无头渲染为软件路径，实测约 13–15 Hz）。
+> **视觉闭环（YOLO 检测、按图像 stamp 的位姿插值、α-β 估计与 hold）见 `docs/yolo_vision_closed_loop_plan.md`。**
 > 目标环境：ROS 2 Jazzy + PX4 v1.16 SITL + Gazebo Harmonic（gz-sim 8）。模型、消息和桥接能力以本机安装版本核验结果为准。
 
 ## 1. 范围与决策
