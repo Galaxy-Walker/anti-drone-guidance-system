@@ -25,8 +25,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 
 def _ensure_pythonsimulation2d_on_path() -> None:
     """开发阶段未安装包时，让同级 `pythonsimulation2d` 可导入。"""
@@ -51,13 +49,14 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
+from gazebosimulation2d.image_utils import (
+    ENCODING_CHANNELS,
+    SUPPORTED_ENCODINGS,
+    image_message_to_bgr,
+)
 from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_timer
 
 HEADER_LENGTH = struct.Struct(">I")
-
-# 与 vision_adapter 一致：相机桥接输出这些编码；bigendian 图像直接拒绝。
-SUPPORTED_ENCODINGS = frozenset({"rgb8", "bgr8", "rgba8", "bgra8", "mono8"})
-ENCODING_CHANNELS = {"rgb8": 3, "bgr8": 3, "rgba8": 4, "bgra8": 4, "mono8": 1}
 
 CSV_FIELDS = (
     "stamp_s",
@@ -327,13 +326,13 @@ class VisionDetector(Node):
         if self._frame_format == "raw":
             return raw[:expected], width, height, encoding
 
-        jpeg = self._encode_jpeg(raw[:expected], width, height, encoding)
+        jpeg = self._encode_jpeg(message)
         if jpeg is None:
             self._log_invalid_frame("JPEG 编码失败（缺少 cv2？）")
             return None
         return jpeg, width, height, encoding
 
-    def _encode_jpeg(self, raw: bytes, width: int, height: int, encoding: str) -> bytes | None:
+    def _encode_jpeg(self, message: Image) -> bytes | None:
         try:
             import cv2
         except ImportError:
@@ -341,18 +340,7 @@ class VisionDetector(Node):
                 self._jpeg_warned = True
                 self.get_logger().error("frame_format=jpeg 需要系统 Python 安装 cv2；请改用 frame_format:=raw")
             return None
-        channels = ENCODING_CHANNELS[encoding]
-        array = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, channels)
-        if encoding == "bgr8":
-            bgr = np.ascontiguousarray(array)
-        elif encoding == "rgb8":
-            bgr = np.ascontiguousarray(array[:, :, ::-1])
-        elif encoding == "rgba8":
-            bgr = np.ascontiguousarray(array[:, :, 2::-1])
-        elif encoding == "bgra8":
-            bgr = np.ascontiguousarray(array[:, :, :3])
-        else:
-            bgr = np.repeat(array, 3, axis=2)
+        bgr = image_message_to_bgr(message)
         ok, buffer = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
         if not ok:
             return None
@@ -376,22 +364,9 @@ class VisionDetector(Node):
         try:
             import cv2
 
-            width, height = int(message.width), int(message.height)
-            encoding = str(message.encoding)
-            channels = ENCODING_CHANNELS[encoding]
-            array = np.frombuffer(bytes(message.data), dtype=np.uint8).reshape(height, width, channels)
-            if encoding == "bgr8":
-                bgr = array
-            elif encoding == "rgb8":
-                bgr = array[:, :, ::-1]
-            elif encoding == "rgba8":
-                bgr = array[:, :, 2::-1]
-            elif encoding == "bgra8":
-                bgr = array[:, :, :3]
-            else:
-                bgr = np.repeat(array, 3, axis=2)
+            bgr = image_message_to_bgr(message)
             path.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(path), np.ascontiguousarray(bgr))
+            cv2.imwrite(str(path), bgr)
             self._last_saved_stamp_ns = stamp_ns
         except ImportError:
             self._save_frame_hz = 0.0
@@ -459,7 +434,9 @@ class VisionDetector(Node):
         self._sequence = 0
         response = self._read_response(self._startup_timeout_s)
         if response is None or not response.get("ready"):
-            self.get_logger().error("YOLO worker 握手失败（模型加载超时或异常），详见 worker stderr")
+            # 先把 worker 的 stderr 转出来再终止：模型路径不存在等启动错误只在这里可见。
+            self._drain_worker_stderr()
+            self.get_logger().error("YOLO worker 握手失败（模型加载超时或异常），详见上面的 worker stderr")
             self._terminate_worker()
             self._consecutive_failures += 1
             return False

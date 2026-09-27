@@ -53,6 +53,10 @@ def read_exact(count):
 
 
 mode = os.environ.get("FAKE_WORKER_MODE", "fixed")
+if mode == "crash_on_start":
+    # 模拟模型路径不存在等启动失败：只写 stderr 后退出，不发 ready 握手。
+    print("worker 启动失败：模型不存在", file=sys.stderr, flush=True)
+    sys.exit(3)
 boxes = json.loads(os.environ.get("FAKE_WORKER_BOXES", "[[100.0,200.0,20.0,10.0,0.9]]"))
 echo = os.environ.get("FAKE_WORKER_ECHO_HEADER", "")
 send({"ready": True, "model": "fake.pt", "device": "0", "imgsz": 640, "names": {"0": "uav"}})
@@ -92,6 +96,25 @@ class PublisherCapture:
 
     def publish(self, message) -> None:
         self.messages.append(message)
+
+
+class LoggerCapture:
+    """捕获节点日志：rclpy 日志不走 Python logging，测试里用替身断言消息。"""
+
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str]] = []
+
+    def info(self, message, **kwargs) -> None:
+        self.messages.append(("info", str(message)))
+
+    def warning(self, message, **kwargs) -> None:
+        self.messages.append(("warning", str(message)))
+
+    def error(self, message, **kwargs) -> None:
+        self.messages.append(("error", str(message)))
+
+    def debug(self, message, **kwargs) -> None:
+        self.messages.append(("debug", str(message)))
 
 
 class FakeTime:
@@ -340,6 +363,24 @@ class TestWorkerLifecycle:
             assert len(node._detections_pub.messages) == 2
             # 重启后的 worker 正常工作，失败计数被成功回包清零。
             assert node._consecutive_failures == 0
+        finally:
+            node._terminate_worker()
+            node.destroy_node()
+
+    def test_handshake_failure_surfaces_worker_stderr(self, fake_worker_script, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("FAKE_WORKER_MODE", "crash_on_start")
+        node = make_node(fake_worker_script, tmp_path, worker_restart_limit=1)
+        logger = LoggerCapture()
+        monkeypatch.setattr(node, "get_logger", lambda: logger)
+        try:
+            node._image_callback(make_image(node))
+            assert node._consecutive_failures == 1
+            assert node._worker is None
+            # 启动失败的 worker stderr 必须转进 ROS 日志，而不是只报“握手失败”。
+            assert any(
+                "[worker]" in message and "模型不存在" in message
+                for _, message in logger.messages
+            )
         finally:
             node._terminate_worker()
             node.destroy_node()

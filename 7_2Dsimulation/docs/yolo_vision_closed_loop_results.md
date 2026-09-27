@@ -53,11 +53,13 @@ source install/setup.bash
 colcon test --packages-select gazebosimulation2d && colcon test-result --verbose
 ```
 
-结果：**82 tests, 0 errors, 0 failures**（检测节点 19、适配节点 45、导引视觉接线 18）。
+结果：**104 tests, 0 errors, 0 failures**（检测节点 20、适配节点 45、导引视觉接线 24、相机记录与图像转换 15；2026-09-27 增加初始捕获、worker stderr 转发与 camera_recorder 用例后复测）。
 
 覆盖要点：协议收发/握手、原图坐标不缩放、空检测、header 复制、节流与过期丢帧、超时/崩溃重启与上限、
-jpeg 帧格式、统计 CSV 与数据集帧；yolo 量测、缓存插值/未来/过期/空洞拒绝、`min_score`、空检测仍记录、
-truth 模式全量回归；视觉参数校验、α-β 接线、hold 零速、odometry 回归、CSV 视觉列、PX4 时间戳。
+jpeg 帧格式、统计 CSV 与数据集帧、握手失败时转发 worker stderr；yolo 量测、缓存插值/未来/过期/空洞拒绝、
+`min_score`、空检测仍记录、truth 模式全量回归；视觉参数校验、α-β 接线、hold 零速、odometry 回归、
+视觉模式初始捕获（起飞保持点取场景起点）、CSV 视觉列、PX4 时间戳；camera_recorder 参数校验、按图像
+stamp 的 1 Hz 节流、重启跳过已存在帧、max_frames 上限与共享图像编码转换。
 
 ### 3.2 纯 Python 估计器测试
 
@@ -72,7 +74,8 @@ uv run python tests/test_target_filter.py
 
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
-  --model .../yolo26_caa_p3_dysample_detfly/weights/best.engine --self-test <Det-Fly 图片>
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --self-test /home/srcbit/Det-Fly-YOLO-1third/images/val/0207134.jpg
 ```
 
 结果：`best.engine` 加载成功，FP16 推理约 2.34 ms/帧；框 `[1698.0, 938.25, 87.0, 46.5]`、score
@@ -135,6 +138,7 @@ Gazebo 渲染域的零样本能力仍需 P3 数据采集判定。联调还发现
 ## 5. 已知边界与风险
 
 - **零样本域差异是最大风险**：Det-Fly 是真实天空背景侧视图，Gazebo 是俯视渲染；P3 门槛不达标时再评估是否需要域适配微调。
+- `yolo_model_path` 必须是完整文件路径；worker 启动失败（如路径不存在）会先以 `[worker]` 前缀转发 worker stderr，再按 `worker_restart_limit` 重试并停止检测，不要复制文档中的路径占位符。
 - 量测精度预期：中心区域 0.1～0.2 m、足印边缘 0.3～0.5 m（像素噪声 + 0.15 m 目标高度平面假设 + 毫秒级同步残差）；
   `pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，**不是独立标定**。
 - 正下方视线接近奇异（`r_norm→0`），`pn_guidance()` 在零偏移附近可能抖动；先用 `pn_mppi`/`pn_nmpc` 的平滑项复测，

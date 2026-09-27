@@ -262,6 +262,37 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 | `vision_hold_on_loss` | true | lost 后零速零加速度悬停、保持 yaw |
 | `min_dt_s` / `max_dt_s` | 0.01 / 0.5 | α-β 的 dt 夹取范围 |
 
+### camera_recorder（相机画面记录，排查 YOLO 用）
+
+`camera_recorder` 独立订阅图像并按固定周期落盘 JPEG，不依赖 `vision_detector` 与 YOLO worker，也不参与导引。在真值/odometry 制导下记录追踪机实际看到的画面，用于区分“YOLO 检测失败”是画面里没有目标、还是模型识别不到；也可以用它确认无阴影世界是否生效（画面里只应有目标机机体，不应有偏移约 5.7 m 的黑色影子）。
+
+| launch 参数 | 节点参数 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `record_camera` | — | false | 是否启动记录节点 |
+| `camera_image_topic` | `image_topic` | /camera/image_raw | 订阅的图像话题 |
+| `camera_record_output_dir` | `output_dir` | outputs/gazebo2d_vision/camera_frames | 输出目录 |
+| `camera_record_hz` | `save_hz` | 1.0 | 保存频率（按图像 `header.stamp` 节流） |
+| `camera_jpeg_quality` | `jpeg_quality` | 90 | JPEG 质量 |
+| `camera_max_frames` | `max_frames` | 0 | 保存上限，0 表示不限制 |
+
+文件名使用图像 `header.stamp`（`<stamp_ns>.jpg`），与数据集帧命名一致；重启后已存在的文件跳过。
+
+```bash
+# 真值制导 + 1 Hz 画面记录（不启动 YOLO）
+ros2 launch gazebosimulation2d guidance.launch.py \
+  algorithm:=pn scenario:=circle \
+  enable_camera:=true vision_source:=truth target_source:=vision \
+  record_camera:=true
+```
+
+记录后可用 worker 自检单帧，快速区分“画面问题”与“模型问题”：
+
+```bash
+/home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --self-test outputs/gazebo2d_vision/camera_frames/<stamp_ns>.jpg
+```
+
 ### 输出
 
 - `/camera/detections`：`vision_msgs/Detection2DArray`（BEST_EFFORT/VOLATILE），bbox 中心为原图坐标，`class_id="drone"`，未检出发布空数组。
@@ -271,6 +302,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 - `outputs/gazebo2d_vision/yolo_detections.csv`：逐处理帧的检测与延迟。
 - `outputs/gazebo2d_vision_runs/<scenario>/<algorithm>/gazebo_samples.csv`：导引记录（含 `target_est_*`、`vision_valid`、`vision_error_xy` 等列；`target_x/y` 仍是 odometry 真值）。
 - `outputs/gazebo2d_vision/dataset/{frames,labels}/`：P3 门槛评估与 P7 微调数据。
+- `outputs/gazebo2d_vision/camera_frames/<stamp_ns>.jpg`：`camera_recorder` 的周期截图（`record_camera:=true` 时），不依赖 YOLO。
 
 ### 数据集采集与 P3 零样本门槛评估
 
@@ -281,7 +313,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
   algorithm:=pn scenario:=circle \
   enable_camera:=true vision_source:=yolo target_source:=vision use_sim_time:=true \
   yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
-  yolo_model_path:=.../best.engine \
+  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
   record_dataset:=true yolo_save_frame_hz:=10.0
 ```
 
@@ -323,7 +355,8 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
-  --model .../best.engine --self-test /home/srcbit/Det-Fly-YOLO-1third/images/val/0207134.jpg
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --self-test /home/srcbit/Det-Fly-YOLO-1third/images/val/0207134.jpg
 ```
 
 已核验（2026-09-26，无头 Gazebo 实测）：相机 link 相对机体的安装平移为 `(0, 0, 0.10)` m、绕 y 轴 90°（光轴朝下）；Gazebo 相机为 1280×960、水平 FOV 1.74 rad、RGB_INT8，桥接输出 `rgb8`；`CameraInfo` 内参 `K=[539.936, 0, 640; 0, 539.936, 480]`、畸变 D 全 0、frame 覆盖为 `camera_link_optical`（`ros_gz_bridge` 1.0.24 支持逐桥接 `frame_id`/`qos_profile`/`lazy`）。30 Hz 是无相机负载下的仿真时间设定值；本机无头渲染走软件 EGL 路径，实测约 13–15 Hz，此时 RTF≈1.00。**不要用 `gz topic -e` 直接订阅图像话题**（实测会拖慢渲染并撑大 gz sim 进程直至 OOM）。

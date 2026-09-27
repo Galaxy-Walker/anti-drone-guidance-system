@@ -28,6 +28,7 @@ setup(
             "guidance_node = gazebosimulation2d.guidance_node:main",
             "vision_adapter = gazebosimulation2d.vision_adapter:main",
             "vision_detector = gazebosimulation2d.vision_detector:main",
+            "camera_recorder = gazebosimulation2d.camera_recorder:main",
         ],
     },
 )

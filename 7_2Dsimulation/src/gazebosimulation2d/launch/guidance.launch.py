@@ -89,6 +89,13 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("record_dataset", default_value="false"),
         DeclareLaunchArgument("vision_dataset_output_dir", default_value="outputs/gazebo2d_vision/dataset"),
         DeclareLaunchArgument("dataset_label_box_size_m", default_value="0.35"),
+        # 相机画面记录节点：真值/odometry 制导下也能独立截图，用于排查 YOLO 检测失败。
+        DeclareLaunchArgument("record_camera", default_value="false"),
+        DeclareLaunchArgument("camera_image_topic", default_value="/camera/image_raw"),
+        DeclareLaunchArgument("camera_record_output_dir", default_value="outputs/gazebo2d_vision/camera_frames"),
+        DeclareLaunchArgument("camera_record_hz", default_value="1.0"),
+        DeclareLaunchArgument("camera_jpeg_quality", default_value="90"),
+        DeclareLaunchArgument("camera_max_frames", default_value="0"),
         # vision_detector 参数：launch 参数统一加 yolo_ 前缀，避免与导引/适配节点重名。
         DeclareLaunchArgument("yolo_python", default_value=""),
         DeclareLaunchArgument("yolo_worker_script", default_value=""),
@@ -212,6 +219,26 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(vision_enabled),
     )
 
+    # 画面记录节点：独立于 vision_source/target_source，只订阅图像。
+    camera_recorder = Node(
+        package="gazebosimulation2d",
+        executable="camera_recorder",
+        name="camera_recorder",
+        output="screen",
+        parameters=[
+            config_file,
+            {
+                "image_topic": LaunchConfiguration("camera_image_topic"),
+                "output_dir": LaunchConfiguration("camera_record_output_dir"),
+                "save_hz": LaunchConfiguration("camera_record_hz"),
+                "jpeg_quality": LaunchConfiguration("camera_jpeg_quality"),
+                "max_frames": LaunchConfiguration("camera_max_frames"),
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+            },
+        ],
+        condition=IfCondition(LaunchConfiguration("record_camera")),
+    )
+
     # vision_source=yolo 时启动检测节点；truth/off 不创建。
     yolo_enabled = PythonExpression(["'", LaunchConfiguration("vision_source"), "' == 'yolo'"])
     vision_detector = Node(
@@ -253,5 +280,5 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     return LaunchDescription(
-        [*arguments, guidance_node, camera_bridge, vision_adapter, vision_detector]
+        [*arguments, guidance_node, camera_bridge, camera_recorder, vision_adapter, vision_detector]
     )
