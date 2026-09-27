@@ -6,6 +6,8 @@
 - target：目标机，沿用 6 的目标机/话题/模型，按合成目标参考轨迹飞行。
 
 导引、距离和记录指标都按 XY 平面计算；高度只用于 Gazebo/PX4 setpoint。
+`target_source=vision` 时追踪机在准备阶段先飞至场景起点上方（目标机同时停在该起点），
+保证开始跟踪时目标已在相机视野内，不依赖两机的 spawn 位置。
 """
 
 from __future__ import annotations
@@ -615,9 +617,16 @@ class GuidanceNode(Node):
             return
 
         self._pursuer_takeoff_position = self._pursuer.position.copy()
+        if self._target_source == "vision":
+            # 视觉闭环的初始捕获：目标机准备阶段停在场景起点，追踪机先飞至其上方再开始跟踪。
+            # 否则目标可能在窄视场（8 m 高度下目标平面足印约 17 x 12 m）之外，永远等不到第一帧量测。
+            # 场景起点是仿真的先验线索（代替外部引导/视觉移交），不依赖 spawn 位置。
+            target_start = self._target_start_reference().position
+            self._pursuer_takeoff_position[:2] = target_start[:2]
         self._pursuer_takeoff_position[2] = self._pursuer_fixed_altitude
         self.get_logger().info(
-            f"locked pursuer takeoff setpoint: p={self._format_vector(self._pursuer_takeoff_position)}"
+            f"locked pursuer takeoff setpoint: p={self._format_vector(self._pursuer_takeoff_position)} "
+            f"(target_source={self._target_source})"
         )
 
     def _update_startup_readiness(self, target_start: TargetState) -> None:
@@ -934,9 +943,11 @@ class GuidanceNode(Node):
         self.get_logger().info(
             "startup_2d "
             f"target_ready={self._target_ready} "
+            f"target_p={self._format_vector(self._target.position)} "
             f"target_err={target_error:.2f} target_speed={target_speed:.2f} "
             f"target_commands_done={self._target_commands_done()} | "
             f"pursuer_ready={self._pursuer_ready} "
+            f"pursuer_p={self._format_vector(self._pursuer.position)} "
             f"pursuer_err={pursuer_error:.2f} pursuer_speed={pursuer_speed:.2f} "
             f"pursuer_commands_done={self._pursuer_commands_done()}"
         )

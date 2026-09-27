@@ -247,6 +247,74 @@ class TestVisionTargetState:
             node.destroy_node()
 
 
+class TestInitialAcquisition:
+    """视觉模式准备阶段把追踪机送到场景起点上方，保证第一帧量测可见。"""
+
+    @pytest.mark.parametrize(
+        ("scenario", "start_xy"),
+        [
+            ("circle", (47.0, 0.0)),
+            ("stationary", (40.0, 20.0)),
+            ("linear", (25.0, -20.0)),
+        ],
+    )
+    def test_vision_mode_targets_scenario_start(self, scenario, start_xy) -> None:
+        node = make_node(target_source="vision", scenario=scenario)
+        try:
+            # 追踪机 spawn 在原点、目标机停在场景起点：起飞点应改为起点上方。
+            set_vehicle_states(
+                node,
+                pursuer_position=(0.0, 0.0, 8.0),
+                target_position=(start_xy[0], start_xy[1], 1.0),
+            )
+            node._ensure_pursuer_takeoff_position()
+            assert node._pursuer_takeoff_position[0] == pytest.approx(start_xy[0])
+            assert node._pursuer_takeoff_position[1] == pytest.approx(start_xy[1])
+            assert node._pursuer_takeoff_position[2] == pytest.approx(node._pursuer_fixed_altitude)
+        finally:
+            node.destroy_node()
+
+    def test_vision_takeoff_setpoint_targets_scenario_start(self) -> None:
+        node = make_node(target_source="vision", scenario="circle")
+        try:
+            set_vehicle_states(node)
+            node._prepare_vehicles_for_tracking(
+                timestamp=0,
+                target_start=node._target_start_reference(),
+            )
+            setpoint = node._pursuer_setpoint_pub.messages[0]
+            # ENU (47, 0, 8) -> NED (0, 47, -8)。
+            assert setpoint.position[0] == pytest.approx(0.0)
+            assert setpoint.position[1] == pytest.approx(47.0)
+            assert setpoint.position[2] == pytest.approx(-node._pursuer_fixed_altitude)
+        finally:
+            node.destroy_node()
+
+    def test_odometry_mode_keeps_spawn_position(self) -> None:
+        node = make_node()
+        try:
+            set_vehicle_states(node, pursuer_position=(3.0, -4.0, 8.2))
+            node._ensure_pursuer_takeoff_position()
+            # odometry 模式保持原行为：起飞点 = 当前 XY + 固定高度。
+            assert node._pursuer_takeoff_position[0] == pytest.approx(3.0)
+            assert node._pursuer_takeoff_position[1] == pytest.approx(-4.0)
+            assert node._pursuer_takeoff_position[2] == pytest.approx(node._pursuer_fixed_altitude)
+        finally:
+            node.destroy_node()
+
+    def test_takeoff_position_is_locked_once(self) -> None:
+        node = make_node(target_source="vision")
+        try:
+            set_vehicle_states(node, pursuer_position=(0.0, 0.0, 8.0))
+            node._ensure_pursuer_takeoff_position()
+            locked = node._pursuer_takeoff_position.copy()
+            node._pursuer.position = np.array([1.0, 2.0, 8.0])
+            node._ensure_pursuer_takeoff_position()
+            assert np.allclose(node._pursuer_takeoff_position, locked)
+        finally:
+            node.destroy_node()
+
+
 class TestGuidanceWiring:
     def test_vision_source_drives_setpoint_from_estimate(self, monkeypatch) -> None:
         node = make_node(target_source="vision")

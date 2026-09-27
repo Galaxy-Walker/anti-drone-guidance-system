@@ -122,7 +122,7 @@ PX4 SITL 的 GCS MAVLink 本地端口是 `18570 + 实例号`（`ROMFS/px4fmu_com
 当前 2D Gazebo 接入行为：
 
 - 目标机使用位置 + 速度 setpoint 跟随 `pythonsimulation2d.target_state` 生成的二维参考轨迹。
-- 追踪机准备/解锁阶段参考 `6_Simulation`：只发布当前位置 hold setpoint，不提前执行导引。
+- 追踪机准备/解锁阶段参考 `6_Simulation`：只发布起飞保持点 setpoint，不提前执行导引；`target_source=vision` 时该保持点取场景起点上方（初始捕获），odometry 模式仍为当前 spawn 位置。
 - 追踪机进入追踪阶段后使用速度 + 加速度 setpoint；二维导引输出的水平加速度作为 PX4 acceleration 前馈发布，position 字段不启用。
 - 导引、记录距离和指标均按 XY 平面计算；追踪阶段 z 速度和 z 加速度指令为 0。
 - `pursuer_fixed_altitude` 默认 8m，用于 2D 仿真配置和结果标注；当前追踪阶段不再通过 position setpoint 强制拉高度。

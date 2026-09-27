@@ -40,7 +40,7 @@
 - `gazebosimulation2d` 是 ROS2 Python 包，用于将二维导引算法接入 PX4/Gazebo 双机 Offboard 仿真。
 - `guidance_node.py` 控制两架 PX4 实例：`/px4_1` 为追踪机，`/px4_2` 为目标机。
 - 目标机按 `pythonsimulation2d.target.target_state()` 生成的二维参考轨迹飞行，高度由 `target_base_altitude` 固定。
-- 启动阶段目标机先飞到场景起点，追踪机锁定准备阶段当前 XY 并起飞到 `pursuer_fixed_altitude`；两机都满足位置和速度阈值后，才开始追踪和数据记录。
+- 启动阶段目标机先飞到场景起点，追踪机锁定准备阶段当前 XY 并起飞到 `pursuer_fixed_altitude`（`target_source=vision` 时改为飞至场景起点上方，保证初始捕获）；两机都满足位置和速度阈值后，才开始追踪和数据记录。
 - 追踪阶段追踪机读取两机 `VehicleOdometry`，在 ENU 坐标下调用二维导引算法；导引输出的水平加速度经限幅后作为 PX4 acceleration 前馈，同时由当前速度积分得到 velocity setpoint。
 - 追踪阶段追踪机 `TrajectorySetpoint.position` 不启用，`OffboardControlMode` 使用 `velocity=True, acceleration=True`；z 速度和 z 加速度指令为 0。
 - 节点发布 `OffboardControlMode`、`TrajectorySetpoint` 和 `VehicleCommand`。
@@ -511,7 +511,7 @@ ros2 launch gazebosimulation2d guidance.launch.py algorithm:=pn_mppi scenario:=c
 
 1. 等待追踪机和目标机均发布有效 `VehicleOdometry`；
 2. 计算场景 `t=0` 的目标起点参考，并让目标机发布 position + velocity setpoint；
-3. 锁定追踪机准备阶段的当前 XY 位置，将 z 改为 `pursuer_fixed_altitude`，作为追踪机起飞/保持 setpoint；
+3. 锁定追踪机起飞/保持点：odometry 模式取准备阶段当前 XY，`target_source=vision` 取场景起点 XY（初始捕获），z 统一改为 `pursuer_fixed_altitude`；
 4. 两机持续发布 setpoint，并在 `offboard_warmup_cycles` 后按配置发送 Offboard 和 arm 命令；
 5. 使用 `target_start_*_tolerance` 检查目标机是否到达场景起点，使用 `pursuer_takeoff_*_tolerance` 检查追踪机是否到达固定高度起飞点；
 6. 两机同时 ready 后，节点重置追踪计时和上一步加速度记忆，开始 2D 追踪与数据记录；

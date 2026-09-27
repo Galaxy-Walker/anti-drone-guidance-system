@@ -128,3 +128,10 @@ $$\hat p_k^-=\hat p_{k-1}+\hat v_{k-1}\Delta t,\qquad
 - 状态机：`tracking → coast`（无新量测超过 `vision_coast_s=0.3 s`）`→ lost`（超过 `vision_loss_s=1.0 s`）`→ tracking`（重捕获）；
 - `lost` 时 `guidance_node_2d` 进入 hold：`velocity=[0,0,0]`、`accel=0`、保持 yaw（现有 `_publish_pursuer_setpoint` 在
   `accel=0` 时会发当前速度，hold 必须单独发零速 setpoint）。
+
+### 5.1 初始捕获（仿真约定）
+
+`target_source=vision` 时 `guidance_node_2d` 把追踪机起飞保持点设为场景起点 XY（高度 `pursuer_fixed_altitude`），
+目标机在准备阶段停在同一起点，因此开始跟踪时目标位于相机视野内。这是仿真中代替外部引导/视觉移交的初始线索；
+`vision_fallback=odometry` 仍预留给未来的远距离捕获，本轮未实现。目标中途脱离视野仍走 coast → lost → hold，
+不提供搜索重捕获。
