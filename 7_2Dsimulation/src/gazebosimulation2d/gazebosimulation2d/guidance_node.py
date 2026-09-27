@@ -64,6 +64,7 @@ from pythonsimulation2d.target_filter import (
     VisionTargetTracker,
 )
 
+from gazebosimulation2d.recording_paths import resolve_recording_path
 from gazebosimulation2d.coordinates import (
     enu_to_ned_list,
     ned_to_enu_vector,
@@ -324,7 +325,7 @@ class GuidanceNode(Node):
         self._pursuer_system_id = int(self.get_parameter("pursuer_system_id").value)
         self._target_system_id = int(self.get_parameter("target_system_id").value)
         self._record_data = _as_bool(self.get_parameter("record_data").value)
-        self._record_output_dir = Path(str(self.get_parameter("record_output_dir").value)).expanduser()
+        self._record_output_dir = resolve_recording_path(str(self.get_parameter("record_output_dir").value))
         self._debug_log = _as_bool(self.get_parameter("debug_log").value)
         self._debug_log_period_s = float(self.get_parameter("debug_log_period_s").value)
         self._startup_log_period_s = float(self.get_parameter("startup_log_period_s").value)

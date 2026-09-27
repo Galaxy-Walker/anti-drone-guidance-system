@@ -310,6 +310,8 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 
 ### 输出
 
+三个 CSV 输出参数 `record_output_dir`、`vision_record_output_dir`、`yolo_stats_csv`（节点参数为 `stats_csv`）的相对路径统一以 `7_2Dsimulation/` 为基准。因此从仓库根目录启动时，`outputs/...` 也会写入 `7_2Dsimulation/outputs/...`；显式绝对路径保持不变，`ros2 run` 直接运行节点也遵循同一规则。数据集和截图路径仍相对于启动目录，建议按本文示例在 `7_2Dsimulation/` 下运行。
+
 - `/camera/detections`：`vision_msgs/Detection2DArray`（BEST_EFFORT/VOLATILE），bbox 中心为原图坐标，`class_id="drone"`，未检出发布空数组。
 - `/camera/detections_truth`：truth 伪检测，score=1，bbox 尺寸仅为占位。
 - `/vision/target_pose`：`geometry_msgs/PoseWithCovarianceStamped`，frame=`enu`；XY 协方差来自像素噪声传播，姿态用单位四元数占位。

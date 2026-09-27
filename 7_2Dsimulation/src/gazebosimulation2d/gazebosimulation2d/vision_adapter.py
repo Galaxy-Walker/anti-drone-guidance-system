@@ -68,6 +68,7 @@ from pythonsimulation2d.camera_geometry import (
 )
 
 from gazebosimulation2d.coordinates import camera_pose_from_odometry
+from gazebosimulation2d.recording_paths import resolve_recording_path
 from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_timer
 
 # 伪检测的 bbox 只是像素级占位，不冒充真实目标框尺寸；中心才是有效信息。
@@ -342,9 +343,9 @@ class VisionAdapter(Node):
         self._debug_log_period_s = self._positive_float("debug_log_period_s")
 
         self._vision_record_data = _as_bool(self.get_parameter("vision_record_data").value)
-        self._vision_record_output_dir = Path(
+        self._vision_record_output_dir = resolve_recording_path(
             str(self.get_parameter("vision_record_output_dir").value)
-        ).expanduser()
+        )
         self._debug_log = _as_bool(self.get_parameter("debug_log").value)
 
         self._min_score = self._bounded_float("min_score", 0.0, 1.0)

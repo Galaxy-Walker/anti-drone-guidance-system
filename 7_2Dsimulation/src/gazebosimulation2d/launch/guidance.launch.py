@@ -47,6 +47,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("pursuer_system_id", default_value="1"),
         DeclareLaunchArgument("target_system_id", default_value="2"),
         DeclareLaunchArgument("record_data", default_value="true"),
+        # 三项 CSV 路径由节点相对于 7_2Dsimulation 解析，绝对路径保持不变。
         DeclareLaunchArgument("record_output_dir", default_value="outputs/gazebo2d"),
         DeclareLaunchArgument("debug_log", default_value="false"),
         DeclareLaunchArgument("debug_log_period_s", default_value="0.2"),

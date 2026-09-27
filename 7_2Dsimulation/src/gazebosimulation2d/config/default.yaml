@@ -30,6 +30,7 @@ guidance_node_2d:
     target_system_id: 2
 
     record_data: true
+    # CSV 相对路径以 7_2Dsimulation 为基准，不受启动目录影响；也可填写绝对路径。
     record_output_dir: outputs/gazebo2d
 
     debug_log: false
@@ -83,6 +84,7 @@ vision_adapter:
     target_plane_sigma_m: 0.1
 
     vision_record_data: true
+    # 相对 7_2Dsimulation 解析，绝对路径保持不变。
     vision_record_output_dir: outputs/gazebo2d_vision
 
     debug_log: false
@@ -126,6 +128,7 @@ vision_detector:
     # 数据集录制：0 关闭；frames/<stamp_ns>.jpg 由本节点落盘。
     save_frame_hz: 0.0
     dataset_output_dir: outputs/gazebo2d_vision/dataset
+    # 相对 7_2Dsimulation 解析，绝对路径保持不变。
     stats_csv: outputs/gazebo2d_vision/yolo_detections.csv
     debug_log: false
     debug_log_period_s: 1.0

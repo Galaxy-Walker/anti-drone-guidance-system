@@ -54,6 +54,7 @@ from gazebosimulation2d.image_utils import (
     SUPPORTED_ENCODINGS,
     image_message_to_bgr,
 )
+from gazebosimulation2d.recording_paths import resolve_recording_path
 from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_timer
 
 HEADER_LENGTH = struct.Struct(">I")
@@ -211,7 +212,7 @@ class VisionDetector(Node):
         self._worker_restart_limit = self._positive_int("worker_restart_limit")
         self._save_frame_hz = self._non_negative_float("save_frame_hz")
         self._dataset_output_dir = Path(str(self.get_parameter("dataset_output_dir").value)).expanduser()
-        self._stats_csv = Path(str(self.get_parameter("stats_csv").value)).expanduser()
+        self._stats_csv = resolve_recording_path(str(self.get_parameter("stats_csv").value))
         self._debug_log = self._as_bool("debug_log")
         self._debug_log_period_s = self._positive_float("debug_log_period_s")
         self._min_process_period_ns = int(1e9 / self._process_hz)
