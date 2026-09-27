@@ -42,7 +42,7 @@ guidance_node_2d:
     # 本轮不允许回退 odometry（odometry 值预留给后续远距离捕获，设置会直接报错）。
     vision_fallback: none
     vision_max_age_s: 0.5
-    # α-β 估计器与丢失状态机，参数含义见 docs/yolo_vision_closed_loop_plan.md §3.5。
+    # α-β 估计器与丢失状态机，参数含义见 README.md 的导引节点视觉参数表。
     vision_alpha: 0.85
     vision_beta: 0.25
     vision_accel_tau_s: 0.5
@@ -67,7 +67,7 @@ vision_adapter:
     target_base_altitude: 1.0
 
     # 相机 link 相对机体 FLU 的安装平移和安装旋转（rpy 单位：度）。
-    # 标称值来自 PX4 x500_mono_cam_down 的 SDF 合并结果，完整链见计划 §4.1。
+    # 标称值来自 PX4 x500_mono_cam_down 的 SDF 合并结果，完整链见 docs/vision_design.md 第 1 节。
     camera_mount_xyz: [0.0, 0.0, 0.10]
     camera_mount_rpy_deg: [0.0, 90.0, 0.0]
 

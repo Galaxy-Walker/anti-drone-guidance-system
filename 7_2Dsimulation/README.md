@@ -8,6 +8,9 @@
 - `src/pythonsimulation2d/`：2D 目标、动力学、导引、指标和绘图代码。
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包。
 - `outputs/`：默认仿真输出目录。
+- [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
+- [视觉设计参考](docs/vision_design.md)：相机几何、进程协议与消息约定。
+- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：历史验证结果与待实测项目。
 
 ## 纯 Python 仿真
 

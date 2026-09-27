@@ -1,7 +1,8 @@
 # YOLO 视觉闭环实施与验证记录
 
-> 对应计划：`docs/yolo_vision_closed_loop_plan.md`。本文件记录 P1–P5 的实现状态、已完成的离线/冒烟验证，
-> 以及尚待闭环实测的 P3 门槛结论与 P6 验收表。**未实测的项目不填写数字。**
+> 本文件保留历史实现状态、离线验证结果与待实测表格；阶段编号仅用于对应历史记录。
+> 这些结果并非本次清理重新验证所得。**未实测的项目不填写数字。**
+> 运行步骤与参数见 [模块 README](../README.md)，接口约定见 [视觉设计参考](vision_design.md)。
 
 ## 1. 实现状态
 
@@ -107,44 +108,7 @@ Gazebo 渲染域的零样本能力仍需 P3 数据采集判定。联调还发现
 
 ## 4. 待闭环实测（P3 门槛与 P6 验收）
 
-外部终端按 `README.md` 启动（Gazebo 由追踪机终端拉起，目标机终端复用同一世界）：
-
-```bash
-# 终端 1：Micro XRCE-DDS Agent
-MicroXRCEAgent udp4 -p 8888
-
-# 终端 2：追踪机（4014 = x500_mono_cam_down，实例 0，/px4_1，circle 起点）
-cd /home/srcbit/anti-drone/PX4-Autopilot
-HEADLESS=1 PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
-  ./build/px4_sitl_default/bin/px4 -i 0
-# 等 "Gazebo world is ready" 与 "Spawning model" 后再启动终端 3
-
-# 终端 3：目标机（4001 = x500，实例 1，/px4_2，同位置；PX4_GZ_STANDALONE=1 复用已启动的 Gazebo）
-PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_2 \
-  ./build/px4_sitl_default/bin/px4 -i 1
-```
-
-（QGC 可选；两个实例的 MAVLink 端口为 18570/18571。）随后：
-
-```bash
-# 1) 闭环 + 数据集采集（save_frame_hz 与 process_hz 对齐，正样本 ≥300、背景 ≥100，覆盖不同相位）
-ros2 launch gazebosimulation2d guidance.launch.py \
-  algorithm:=pn scenario:=circle enable_camera:=true \
-  vision_source:=yolo target_source:=vision use_sim_time:=true \
-  record_dataset:=true yolo_save_frame_hz:=10.0 \
-  yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
-  yolo_model_path:=.../best.engine \
-  record_output_dir:=outputs/gazebo2d_vision_runs
-
-# 2) 零样本门槛评估
-/home/srcbit/miniconda3/envs/ultralytics/bin/python tools/vision_offline_eval.py \
-  --dataset outputs/gazebo2d_vision/dataset --model .../best.engine \
-  --output outputs/gazebo2d_vision/eval
-
-# 3) 出图与指标
-uv run plot_gazebo_csv.py outputs/gazebo2d_vision_runs/circle --output-dir outputs/circle_vision
-uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
-```
+环境启动、数据采集、离线评估和绘图命令统一维护在 [模块 README](../README.md#下视相机与视觉闭环)。Gazebo、PX4 SITL、XRCE Agent 与 QGC 由使用者手动启动。
 
 ### 4.1 P3 门槛表（待填）
 
@@ -170,7 +134,7 @@ uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_re
 
 ## 5. 已知边界与风险
 
-- **零样本域差异是最大风险**：Det-Fly 是真实天空背景侧视图，Gazebo 是俯视渲染；P3 门槛不达标时按计划进入 P7 微调。
+- **零样本域差异是最大风险**：Det-Fly 是真实天空背景侧视图，Gazebo 是俯视渲染；P3 门槛不达标时再评估是否需要域适配微调。
 - 量测精度预期：中心区域 0.1～0.2 m、足印边缘 0.3～0.5 m（像素噪声 + 0.15 m 目标高度平面假设 + 毫秒级同步残差）；
   `pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，**不是独立标定**。
 - 正下方视线接近奇异（`r_norm→0`），`pn_guidance()` 在零偏移附近可能抖动；先用 `pn_mppi`/`pn_nmpc` 的平滑项复测，

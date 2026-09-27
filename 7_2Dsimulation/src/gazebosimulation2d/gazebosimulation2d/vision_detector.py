@@ -8,7 +8,7 @@
 - 未检出时发布空数组，区分“没有目标”和“检测节点挂了”；
 - 每处理帧记录一行 `yolo_detections.csv`（含推理耗时与端到端耗时）。
 
-设计决策与协议细节见 `docs/yolo_vision_closed_loop_plan.md` §3.1/§3.4。
+设计决策与协议细节见 `docs/vision_design.md` 第 2、4 节。
 """
 
 from __future__ import annotations

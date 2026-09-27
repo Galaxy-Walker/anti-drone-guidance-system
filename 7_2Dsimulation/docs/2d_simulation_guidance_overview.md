@@ -569,39 +569,7 @@ uv run plot_gazebo_csv.py \
 
 几何与时间约定：公共世界系为 ENU，相机光学系为 x 右、y 下、z 前；安装平移和旋转指相机 link 相对机体 FLU。标称安装参数为平移 `[0, 0, 0.10]` m、rpy `[0, 90°, 0]`，来自 PX4 SDF 合并结果与实际运行核验。视觉链路统一 `use_sim_time=true`，位姿缓存按图像 `header.stamp` 插值，超出容差/缓存范围直接拒绝并记录原因；truth 旁路仍用接收时间近邻配对，只验证几何往返和消息封装，不验证渲染、识别或 YOLO 精度。
 
-启动与验收（Gazebo、PX4 SITL、XRCE Agent、QGC 仍由使用者在外部终端启动；完整参数表见 `7_2Dsimulation/README.md`）：
-
-```bash
-# 终端 1：Micro XRCE-DDS Agent
-MicroXRCEAgent udp4 -p 8888
-
-# 终端 2：追踪机（airframe 4014 = x500_mono_cam_down，实例 0，/px4_1，spawn 在 circle 起点）
-cd /home/srcbit/anti-drone/PX4-Autopilot
-HEADLESS=1 PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
-  ./build/px4_sitl_default/bin/px4 -i 0
-# 等 "Gazebo world is ready" 后再启动目标机
-
-# 终端 3：目标机（airframe 4001 = x500，实例 1，/px4_2，同位置；复用终端 2 的 Gazebo）
-PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_2 \
-  ./build/px4_sitl_default/bin/px4 -i 1
-
-# 仓库终端：桥接 + 导引 + YOLO 视觉闭环
-ros2 launch gazebosimulation2d guidance.launch.py \
-  algorithm:=pn scenario:=circle enable_camera:=true \
-  vision_source:=yolo target_source:=vision use_sim_time:=true \
-  yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
-  yolo_model_path:=.../best.engine
-```
-
-模型实例名分别为 `x500_mono_cam_down_0` 与 `x500_1`；不要额外传 `PX4_SIM_MODEL`（会覆盖 4014 的相机模型）。
-
-离线几何与坐标测试（不依赖 ROS/PX4）：
-
-```bash
-cd 7_2Dsimulation
-uv run python tests/test_camera_geometry.py
-uv run python tests/test_target_filter.py
-```
+启动、参数与测试命令统一见 [模块 README](../README.md#下视相机与视觉闭环)，接口约定见 [视觉设计参考](vision_design.md)，历史验证结果见 [视觉验证记录](yolo_vision_closed_loop_results.md)。
 
 真实图像外参验证需要独立图像观测（静态标记、独立像素测量和受控悬停），目前未验证；未完成前不应报告真实视觉误差指标。零样本门槛评估（Recall@IoU、像素误差）由 `tools/vision_offline_eval.py` 在闭环采集的数据集上完成，未完成前不宣称检测精度。标注图、多目标跟踪、TF 与视觉伺服导引不在本轮范围内。
 

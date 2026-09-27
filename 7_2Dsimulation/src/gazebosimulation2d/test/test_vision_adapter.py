@@ -22,7 +22,6 @@ import time
 
 import numpy as np
 import pytest
-import rclpy
 from px4_msgs.msg import VehicleOdometry
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import CameraInfo
@@ -40,13 +39,6 @@ IDENTITY_QUATERNION = [1.0, 0.0, 0.0, 0.0]
 PURSUER_POSITION_NED = (0.0, 0.0, -8.0)
 # ENU (3, 4, 1)：目标在固定 1 m 平面，位于相机视场内。
 TARGET_POSITION_NED = (4.0, 3.0, -1.0)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
 
 
 @pytest.fixture

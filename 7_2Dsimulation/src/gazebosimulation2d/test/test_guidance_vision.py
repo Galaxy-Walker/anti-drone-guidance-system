@@ -23,7 +23,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.parameter import Parameter
 
@@ -47,13 +46,6 @@ class PublisherCapture:
 
     def publish(self, message) -> None:
         self.messages.append(message)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
 
 
 def make_node(**overrides) -> GuidanceNode:

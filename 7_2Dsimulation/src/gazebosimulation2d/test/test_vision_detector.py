@@ -21,7 +21,6 @@ import sys
 
 import numpy as np
 import pytest
-import rclpy
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import Image
 
@@ -101,13 +100,6 @@ class FakeTime:
     @classmethod
     def monotonic_ns(cls) -> int:
         return cls.now_ns
-
-
-@pytest.fixture(scope="module", autouse=True)
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
 
 
 @pytest.fixture(scope="module")
