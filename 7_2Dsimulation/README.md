@@ -165,7 +165,9 @@ sudo apt install ros-jazzy-ros-gz-bridge ros-jazzy-vision-msgs ros-jazzy-rqt-ima
 
 追踪机使用 PX4 自带 `x500_mono_cam_down`（airframe 4014，Gazebo 模型实例 `x500_mono_cam_down_0`），目标机用 `x500`（airframe 4001，实例 `x500_1`）。以下终端由使用者手动启动，本仓库的 launch 不会拉起它们。
 
-视觉闭环要求两机 spawn 在目标场景起点：circle 的起点是 `(47, 0)`（`circle_center + (12, 0)`，见 `pythonsimulation2d/config.py`）。起飞前两机都在地面等待（追踪机随后定高 8 m、目标机 1 m），所以两个 `PX4_GZ_MODEL_POSE` 相同：
+视觉模式使用仓库内置的**无阴影世界** `worlds/default.sdf`：`<scene><shadows>` 与太阳 `cast_shadows` 都改为 `false`，其余与 PX4 v1.16 的 `default.sdf` 逐字一致。原因：下视相机 8 m 高度、目标平面 1 m 时太阳仰角约 51°，两架无人机的影子会偏移约 5.7 m 投到画面里，YOLO 容易把影子误检成目标。世界名保持 `default`，`config/camera_bridge.yaml` 的 `/world/default/...` 话题不变。
+
+**Gazebo 先于 PX4 手动启动**：PX4 检测到已运行的世界后不会再拉起 Gazebo/GUI，两机只做连接；这样也便于把无阴影世界固定为实验配置。手动启动时 PX4 进程需要自己 source `gz_env.sh`（`px4-rc.gzsim` 只在由它拉起 Gazebo 的分支里 source，否则 `PX4_GZ_MODELS` 为空、模型 spawn 会失败）：
 
 ```bash
 # 终端 1（可选）：QGC 监控两机；WSL2 下按上一节备忘录配置 18570/18571 两条链路
@@ -173,25 +175,38 @@ sudo apt install ros-jazzy-ros-gz-bridge ros-jazzy-vision-msgs ros-jazzy-rqt-ima
 # 终端 2：Micro XRCE-DDS Agent（先于 PX4 启动）
 MicroXRCEAgent udp4 -p 8888
 
-# 终端 3：追踪机（airframe 4014 = x500_mono_cam_down，实例 0，/px4_1）
-# 无显示器时加 HEADLESS=1（无头渲染走软件 EGL，相机仍能出图）；需要 Gazebo GUI 时去掉
+# 终端 3：Gazebo（无阴影世界；仅 server，需要 GUI 时去掉 -s）
+export GZ_CONFIG_PATH=/usr/share/gz
 cd /home/srcbit/anti-drone/PX4-Autopilot
-HEADLESS=1 PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
+source build/px4_sitl_default/rootfs/gz_env.sh
+gz sim -r -s /home/srcbit/anti-drone/anti-drone-guidance-system/7_2Dsimulation/worlds/default.sdf
+# 等本终端打印 "Serving world [default]"（或至少无报错）后再启动 PX4
+
+# 终端 4：追踪机（airframe 4014 = x500_mono_cam_down，实例 0，/px4_1）
+export GZ_CONFIG_PATH=/usr/share/gz
+cd /home/srcbit/anti-drone/PX4-Autopilot
+source build/px4_sitl_default/rootfs/gz_env.sh
+PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="49,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
   ./build/px4_sitl_default/bin/px4 -i 0
 # 等本终端出现 "INFO  [init] Gazebo world is ready" 和 "Spawning model" 后再启动目标机
 
-# 终端 4：目标机（airframe 4001 = x500，实例 1，/px4_2）
-# PX4_GZ_STANDALONE=1：复用终端 3 已启动的 Gazebo，不再另起 server
+# 终端 5：目标机（airframe 4001 = x500，实例 1，/px4_2）
+export GZ_CONFIG_PATH=/usr/share/gz
+cd /home/srcbit/anti-drone/PX4-Autopilot
+source build/px4_sitl_default/rootfs/gz_env.sh
 PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_2 \
   ./build/px4_sitl_default/bin/px4 -i 1
 ```
 
 说明：
 
-- 只由终端 3 启动 Gazebo；终端 4 必须带 `PX4_GZ_STANDALONE=1`，否则第二个实例可能再起一个 Gazebo server 造成冲突。
+- Gazebo 由终端 3 手动启动，PX4 两机都只连接：实例 0 自动检测已运行的世界，实例 1 带 `PX4_GZ_STANDALONE=1`；不会再起 server 造成冲突。
+- 两机 spawn 的 XY 至少错开约 2 m（示例 `49,0` / `47,0`），避免两个模型在地面重叠。
+- `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `pythonsimulation2d/config.py`），目标机同时被送往同一起点，保证开始跟踪时目标在相机视野内；因此两机 spawn 位置不强制，示例只是缩短准备时间。
 - airframe 自带 `PX4_GZ_WORLD=default`，所以 `config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
 - 新环境首次运行相机机型前需 `make px4_sitl gz_x500_mono_cam_down`（本机 SITL 已编译）。
 - 两个实例的 GCS MAVLink 本地端口分别是 18570/18571（见上一节 QGC 备忘录）。
+- 不想手动起 Gazebo 时，也可把 `worlds/default.sdf` 复制覆盖到 PX4 的 `Tools/simulation/gz/worlds/default.sdf`，仍按旧流程由 PX4 拉起；缺点是 PX4 checkout 会带本地改动。
 
 启动桥接与视觉节点：
 

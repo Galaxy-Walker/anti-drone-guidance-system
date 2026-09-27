@@ -42,6 +42,16 @@ guidance_node_2d（target_source=vision）── α-β update(stamp) → predict
 拒绝原因集合：`no_camera_info / invalid_pursuer_odometry / no_pursuer_odometry / pose_cache_miss /
 pose_cache_stale / pose_cache_future / no_drone_detection / low_score / backprojection_failed`。
 
+初始捕获：`target_source=vision` 时 `guidance_node_2d` 把追踪机起飞保持点设为场景起点 XY（高度
+`pursuer_fixed_altitude`），目标机在准备阶段停在该起点，保证开始跟踪时目标已在相机视野内，不依赖两机
+spawn 位置。下视相机在 8 m 高度、目标平面 1 m 时的足印约 17 x 12 m；circle 目标按默认 spawn 悬停时
+最近距离 23 m，永远无法进入视野，必须先完成初始捕获。
+
+环境：视觉实验使用仓库内置无阴影世界 `worlds/default.sdf`（相对 PX4 v1.16 的 `default.sdf` 仅关闭
+`<scene><shadows>` 与太阳 `cast_shadows`，世界名保持 `default`）。下视相机 8 m 高度、目标平面 1 m 时
+太阳仰角约 51°，两架无人机的影子会偏移约 5.7 m 落在画面内，YOLO 容易把影子误检成目标；Gazebo 先于
+PX4 手动启动，启动步骤见 [模块 README](../README.md#下视相机与视觉闭环)。
+
 ## 3. 已完成验证
 
 ### 3.1 ROS 单元/集成测试（`colcon test`，假 worker，不需要 torch/GPU）
