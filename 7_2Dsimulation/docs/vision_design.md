@@ -90,7 +90,7 @@ stderr        : 人员可读日志，节点转发到 ROS 日志
 
 ## 3. 时间基准与位姿缓存
 
-- `config/camera_bridge.yaml` 提供 `/clock` 桥接（`gz.msgs.Clock → rosgraph_msgs/msg/Clock`）。
+- `src/gazebosimulation2d/config/camera_bridge.yaml` 提供 `/clock` 桥接（`gz.msgs.Clock → rosgraph_msgs/msg/Clock`）。
 - 视觉链路三节点（`vision_detector`、`vision_adapter`、`guidance_node_2d`）在视觉模式下统一 `use_sim_time:=true`；
   `vision_source=yolo` 时若 `use_sim_time=false`，`vision_adapter` 直接报错退出。
 - `vision_adapter` 维护追踪机位姿缓存 `(t_sim_ns, position_ned, quaternion_wxyz)`：

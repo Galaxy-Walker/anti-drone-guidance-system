@@ -1,7 +1,7 @@
 # YOLO 视觉闭环实施与验证记录
 
-> 本文件保留历史实现状态、离线验证结果与待实测表格；阶段编号仅用于对应历史记录。
-> 这些结果并非本次清理重新验证所得。**未实测的项目不填写数字。**
+> 本文件记录实现状态、离线验证结果与 2026-09-30 的 Gazebo 闭环实测数据；阶段编号仅用于对应历史记录。
+> **未实测的项目不填写数字。**
 > 运行步骤与参数见 [模块 README](../README.md)，接口约定见 [视觉设计参考](vision_design.md)。
 
 ## 1. 实现状态
@@ -10,12 +10,12 @@
 | --- | --- | --- |
 | P1 | `vision_detector` 检测节点 + `scripts/yolo_worker.py` 常驻推理 + 协议/重启/录制 | 已实现，离线测试与真实引擎自检通过 |
 | P2 | `vision_adapter` yolo 模式：检测订阅、按图像 stamp 的位姿缓存插值、拒绝原因、CSV 扩展、数据集标注 | 已实现，离线测试通过 |
-| P3 | `tools/vision_offline_eval.py` 零样本评估（Recall@IoU、像素误差、conf 扫描） | 工具已实现并冒烟验证；**Gazebo 数据集采集与门槛结论待闭环实测** |
-| P4 | `pythonsimulation2d/target_filter.py` α-β + coast/lost 状态机 | 已实现，17 项离线测试通过 |
+| P3 | `tools/vision_offline_eval.py` 零样本评估（Recall@IoU、像素误差、conf 扫描） | 工具已实现并冒烟验证；2026-09-30 闭环未采数据集，未做门槛评估 |
+| P4 | `src/pythonsimulation2d/target_filter.py` α-β + coast/lost 状态机 | 已实现，17 项离线测试通过 |
 | P5 | `guidance_node_2d` 视觉接线、hold、记录列、`px4_utils` 宿主墙钟、绘图与 launch | 已实现，18 项 ROS 测试通过 |
-| P6 | Gazebo 闭环验收 | **待实测** |
+| P6 | Gazebo 闭环验收 | 已实测（2026-09-30）：跟踪段丢失达标，检测率与水平偏移未达门槛，见第 4 节 |
 | P7 | 域适配微调（仅 P3 不达标时） | 未触发 |
-| P8 | 文档与结果表 | 本文件 + README 已更新；结果表待 P6 数据 |
+| P8 | 文档与结果表 | 本文件 + README 已更新，P6 结果已记录 |
 
 ## 2. 数据流与关键决策
 
@@ -39,8 +39,10 @@ guidance_node_2d（target_source=vision）── α-β update(stamp) → predict
 `timestamp_sample` 与 ROS 时钟同源），量测按图像 `header.stamp` 插值；三节点均有墙钟防呆，2 s 内收不到
 `/clock` 会打印 FATAL 并退出。残余同步误差（接收时刻 ≠ 采样时刻）在 `pose_match_dt_ms` 中量化。
 
-拒绝原因集合：`no_camera_info / invalid_pursuer_odometry / no_pursuer_odometry / pose_cache_miss /
-pose_cache_stale / pose_cache_future / no_drone_detection / low_score / backprojection_failed`。
+拒绝原因集合（yolo 模式）：`no_camera_info / no_pursuer_odometry / pose_cache_miss / pose_cache_stale /
+pose_cache_future / no_drone_detection / low_score / backprojection_failed`；truth 模式另有
+`no_target_odometry / unsupported_pursuer_frame / unsupported_target_frame / invalid_pursuer_odometry /
+invalid_target_odometry / projection_failed`。
 
 初始捕获：`target_source=vision` 时 `guidance_node_2d` 把追踪机起飞保持点设为场景起点 XY（高度
 `pursuer_fixed_altitude`），目标机在准备阶段停在该起点，保证开始跟踪时目标已在相机视野内，不依赖两机
@@ -84,7 +86,7 @@ uv run python tests/test_target_filter.py
 
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
-  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   --self-test /home/srcbit/Det-Fly-YOLO-1third/images/val/0207134.jpg
 ```
 
@@ -119,38 +121,75 @@ Gazebo 渲染域的零样本能力仍需 P3 数据采集判定。联调还发现
 `ros2 launch ... vision_source:=yolo target_source:=vision use_sim_time:=true` 启动三个节点；在无
 `/clock` 的环境下，三个节点分别在 2 s 后打印明确 FATAL 并干净退出（验证墙钟防呆可用，而不是静默悬停）。
 
-## 4. 待闭环实测（P3 门槛与 P6 验收）
+## 4. Gazebo 闭环实测（2026-09-30）
 
-环境启动、数据采集、离线评估和绘图命令统一维护在 [模块 README](../README.md#下视相机与视觉闭环)。Gazebo、PX4 SITL、XRCE Agent 与 QGC 由使用者手动启动。
+环境：PX4 v1.16 SITL + Gazebo 无阴影世界、`circle` 目标，`vision_source=yolo` + `target_source=vision`、
+`use_sim_time=true`，模型 `yolo26_baseline_detfly/weights/best.engine`；四种算法依次各跑 40 s。
+外部终端启动、参数与绘图命令见 [模块 README](../README.md#下视相机与视觉闭环)。
 
-### 4.1 P3 门槛表（待填）
+原始记录（均在仓库 `outputs/`）：
 
-| 指标 | 目标 | 实测 |
-| --- | --- | --- |
-| 正样本帧数 / 背景帧数 | ≥ 300 / ≥ 100 | 待填 |
-| Recall@IoU0.3（conf=0.25） | ≥ 0.8 | 待填 |
-| Recall@IoU0.5（conf=0.25） | 记录 | 待填 |
-| 匹配框中心像素误差 p50 / p95 | 记录 | 待填 |
-| 背景帧误检率 | 记录 | 待填 |
-| 结论（直接闭环 / 降 conf / P7 微调） | — | 待填 |
+```text
+gazebo2d_vision_runs/circle/{basic,pn,pn_mppi,pn_nmpc}/gazebo_samples.csv
+gazebo2d_vision/vision_samples.csv        # 逐量测记录，来自最后一次 pn_nmpc 运行
+gazebo2d_vision/yolo_detections.csv       # 逐处理帧检测，同上
+circle_vision/                            # 绘图与 metrics.csv
+```
 
-### 4.2 P6 验收表（待填）
+时间口径：以 `gazebo_samples.csv` 的 0–40 s 为跟踪窗口，对应视觉记录的 elapsed 11.46–51.46 s
+（与引导节点记录的量测计数 256 对齐）；窗口外的起飞准备与收尾数据不计入。
 
-| 指标 | 目标 | 实测 |
-| --- | --- | --- |
-| `/camera/detections` 帧率 | ≈ `process_hz`，worker 重启 0 次 | 待填 |
-| 闭环内检测率（相机视野内） | ≥ 0.9 | 待填 |
-| 水平偏移 p95（追踪机 vs 目标 XY） | ≤ 2.0 m | 待填 |
-| 跟踪段丢失（`lost`） | 首次进入跟踪后无 > 1 s 连续丢失 | 待填 |
-| 记录完整性 | 4 类 CSV + 图 + 指标齐全 | 待填 |
-| 运行时长 | 完成 `sim_time`，无异常退出 | 待填 |
+### 4.1 视觉量测统计（跟踪窗口）
+
+| 指标 | 实测 |
+| --- | ---: |
+| 处理帧 / 有效量测 | 309 / 256 |
+| 帧级检出率 | 0.829 |
+| 拒绝原因 | 全部为 `no_drone_detection`（53 帧） |
+| 最长连续丢失 | 0.90 s |
+| 检测时延 p50 / p95 | 36 / 56 ms |
+| 检测分数 p50 / p95 | 0.774 / 0.839 |
+| 像素残差 p50 / p95（同源诊断） | 154 / 196 px |
+| 位置残差 p50 / p95（同源诊断） | 1.99 / 2.16 m |
+| 检测帧率（仿真时间） | ≈7.7 Hz |
+| 推理 / 端到端耗时 p50 | 2.8 ms / 11.5 ms |
+
+像素与位置残差由 `vision_adapter` 用目标 odometry 参考计算，与量测同源；本次记录中残差呈近似常值
+`(-2.0, +0.1) m`（标准差 < 0.15 m），且不随时间与 yaw 变化，与像素噪声的量级不符。这来自两机本地系的
+常值偏移：本次运行两机 spawn 为追踪机 `49,0`、目标机 `47,0`（x 相差 2 m），残差 x 分量与 spawn 差
+（`47 - 49 = -2 m`）一致，符合 [视觉设计参考](vision_design.md) 1.1 节提示的本地原点问题；视觉量测在
+追踪机本地系、目标 odometry 在目标机本地系，直接相减就会得到这个常值差。**若要用 P6 门槛判定，应先让
+两机同点 spawn 或做原点转换后重跑；在此之前，所有“vs odom”口径的误差与距离都不能当作量测精度。**
+
+### 4.2 P6 验收
+
+| 指标 | 目标 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| `/camera/detections` 帧率 | ≈ `process_hz`（10 Hz），worker 重启 0 次 | ≈7.7 Hz（仿真时间）；重启次数未记录进 CSV | 未达 |
+| 闭环内检测率（相机视野内） | ≥ 0.9 | 0.829（256/309） | 未达 |
+| 水平偏移 p95（追踪机 vs 目标 XY） | ≤ 2.0 m | 估计口径：`basic/pn` 3.00/3.46 m、`pn_mppi/pn_nmpc` 9.00/4.78 m；目标 odometry 口径整体再大约 2 m（见 4.1） | 未达 |
+| 跟踪段丢失（`lost`） | 首次进入跟踪后无 > 1 s 连续丢失 | 最长 0.90 s | 达标 |
+| 记录完整性 | 4 类 CSV + 图 + 指标齐全 | `vision_samples.csv`、`yolo_detections.csv`、4×`gazebo_samples.csv`、图与 `metrics.csv` 齐全；未采数据集/标注 | 齐全 |
+| 运行时长 | 完成 `sim_time`，无异常退出 | 0–40 s 完整记录 | 达标 |
+
+结论：本次 P6 **未通过**。
+
+- 帧级检出率 0.829 低于 0.9，53 帧拒绝全部为 `no_drone_detection`；其中可能混有目标短暂离开
+  相机足印的时段，建议用 `camera_recorder` 画面复核后再区分“模型漏检”与“目标不在视野”。
+- 水平偏移按控制器实际使用的估计口径也在 3.0～9.0 m，四算法均未达到 2.0 m；`pn_mppi`/`pn_nmpc`
+  在该次运行中没有回到 1.5 m 捕获半径。
+- 若要按 P6 门槛给出判定，需先对齐两机本地原点（同点 spawn 或原点转换）后重跑；本次记录可作为视觉链路连通性验证。
 
 ## 5. 已知边界与风险
 
 - **零样本域差异是最大风险**：Det-Fly 是真实天空背景侧视图，Gazebo 是俯视渲染；P3 门槛不达标时再评估是否需要域适配微调。
 - `yolo_model_path` 必须是完整文件路径；worker 启动失败（如路径不存在）会先以 `[worker]` 前缀转发 worker stderr，再按 `worker_restart_limit` 重试并停止检测，不要复制文档中的路径占位符。
-- 量测精度预期：中心区域 0.1～0.2 m、足印边缘 0.3～0.5 m（像素噪声 + 0.15 m 目标高度平面假设 + 毫秒级同步残差）；
-  `pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，**不是独立标定**。
+- 量测精度设计预期为厘米级（像素噪声 + 0.15 m 目标高度平面假设 + 毫秒级同步残差），但 2026-09-30 实测的
+  同源残差呈约 2 m 的常值偏差（见 4.1），指向两机本地原点/坐标对齐问题而非像素噪声；对齐前不要引用任何
+  误差数字作为精度指标。`pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，**不是独立标定**。
+- **两机本地原点不一致会让跨机指标带常值偏差**：`vision_adapter` 的“vs odom”诊断列和
+  `gazebo_samples.csv` 的距离列只对原点一致的两机成立；两机在不同点 spawn（本记录 `49,0` / `47,0`）
+  会产生约 2 m 的常值 xy 偏差，需要两机同点 spawn 或在 ROS 边界显式转换，见 [视觉设计参考](vision_design.md) 1.1 节。
 - 正下方视线接近奇异（`r_norm→0`），`pn_guidance()` 在零偏移附近可能抖动；先用 `pn_mppi`/`pn_nmpc` 的平滑项复测，
   必要时记录“最小保持间距”调参，不新增算法。
 - PX4 SITL 的 `hrt` 由 Gazebo 时钟驱动（`GZBridge::clockCallback`），但本链路不依赖该事实：位姿缓存使用接收时的

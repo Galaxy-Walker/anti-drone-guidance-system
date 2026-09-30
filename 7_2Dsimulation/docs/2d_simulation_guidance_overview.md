@@ -2,7 +2,7 @@
 
 ## 1. 仿真目的与验证思路
 
-`7_2Dsimulation` 是面向无人机目标追踪问题的 **二维定高俯瞰仿真**。与 `6_Simulation` 中的三维有限视场仿真不同，本部分当前不引入深度相机、FOV 可见性约束或目标丢失估计，而是将追踪问题简化到 XY 平面，用于验证不同二维导引与预测控制策略在相同初始条件和物理约束下的追踪性能。
+`7_2Dsimulation` 是面向无人机目标追踪问题的 **二维定高俯瞰仿真**。与 `6_Simulation` 中的三维有限视场仿真不同，本部分不引入深度相机与 FOV 可见性约束，导引和指标简化到 XY 平面，用于验证不同二维导引与预测控制策略在相同初始条件和物理约束下的追踪性能；追踪机下视单目相机的视觉量测链路（YOLO 检测 → α-β 估计 → coast/lost 兜底）已接入，见 11.5 节。
 
 仿真目标包括：
 
@@ -32,6 +32,8 @@
 | `metrics.py` | 计算捕获、距离、能量、路径长度和 yaw 平滑性指标 |
 | `plotting.py` | 生成轨迹、距离、加速度、yaw rate 和指标图 |
 | `math_utils.py` | 提供 XY 平面归一化、限幅、定高和角度更新工具函数 |
+| `camera_geometry.py` | 下视相机投影/反投影、像素雅可比与前向协方差传播（无 ROS 依赖） |
+| `target_filter.py` | 视觉量测 α-β 估计器与 coast/lost 状态机（无 ROS 依赖） |
 
 ### 2.2 ROS2/PX4/Gazebo 二维闭环接入模块
 
@@ -44,7 +46,7 @@
 - 追踪阶段追踪机读取两机 `VehicleOdometry`，在 ENU 坐标下调用二维导引算法；导引输出的水平加速度经限幅后作为 PX4 acceleration 前馈，同时由当前速度积分得到 velocity setpoint。
 - 追踪阶段追踪机 `TrajectorySetpoint.position` 不启用，`OffboardControlMode` 使用 `velocity=True, acceleration=True`；z 速度和 z 加速度指令为 0。
 - 节点发布 `OffboardControlMode`、`TrajectorySetpoint` 和 `VehicleCommand`。
-- `config/default.yaml` 与 `launch/guidance.launch.py` 暴露了启动就位阈值、调试日志周期和记录目录等参数。
+- `src/gazebosimulation2d/config/default.yaml` 与 `src/gazebosimulation2d/launch/guidance.launch.py` 暴露了启动就位阈值、调试日志周期和记录目录等参数。
 - Gazebo 记录结果保存为 `outputs/gazebo2d/<scenario>/<algorithm>/gazebo_samples.csv`，可由 `plot_gazebo_csv.py` 后处理。
 
 ## 3. 坐标系与状态变量定义
@@ -119,7 +121,7 @@ yaw 用于描述二维俯瞰平面内的机头朝向。每个仿真步中，追�
 
 ### 4.4 Gazebo 接入默认参数
 
-以下参数由 `src/gazebosimulation2d/config/default.yaml` 和 `launch/guidance.launch.py` 提供，主要影响 PX4/Gazebo 闭环启动与调试：
+以下参数由 `src/gazebosimulation2d/config/default.yaml` 和 `src/gazebosimulation2d/launch/guidance.launch.py` 提供，主要影响 PX4/Gazebo 闭环启动与调试：
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
@@ -389,7 +391,7 @@ outputs/<scenario>/
 
 ## 10. 离线仿真结果分析
 
-以下结果来自当前仓库中 `7_2Dsimulation/outputs/<scenario>/metrics.csv`。
+以下结果来自生成文档时的一次离线仿真记录，重跑 `uv run main.py --scenario all` 可复现；`outputs/` 为生成物、不入库。
 
 ### 10.1 静止目标场景
 
@@ -490,9 +492,11 @@ outputs/<scenario>/
 
 ```bash
 cd 7_2Dsimulation
-# 首次构建需先编译 px4_msgs（本仓库不跟踪 src/px4_msgs）；之后可改用 --packages-select 增量编译
-colcon build --packages-up-to gazebosimulation2d
+# 首次从零构建用 --packages-up-to 把 px4_msgs 一并编译，并显式指定系统 Python3
+colcon build --packages-up-to gazebosimulation2d \
+  --cmake-clean-cache --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/setup.bash
+# install/ 中已有 px4_msgs 后，后续增量编译可改用 --packages-select gazebosimulation2d
 ```
 
 启动默认 2D 导引节点：
@@ -549,39 +553,36 @@ ros2 launch gazebosimulation2d guidance.launch.py debug_log:=true debug_log_peri
 Gazebo CSV 字段包括：时间、两机位置速度、追踪机实际发布的加速度指令、yaw 和 XY 距离。后处理命令示例：
 
 ```bash
+# 默认导引记录（odometry 基线）
 uv run plot_gazebo_csv.py \
   outputs/gazebo2d/circle \
   --output-dir outputs/gazebo2d/circle/total
+
+# 视觉闭环使用独立记录目录时，绘图也单独输出，避免覆盖基线
+uv run plot_gazebo_csv.py \
+  outputs/gazebo2d_vision_runs/circle \
+  --output-dir outputs/circle_vision
 ```
 
 `plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。
 
 ### 11.5 下视相机与视觉闭环
 
-追踪机下视相机已经接入完整闭环（`vision_source:=yolo` + `target_source:=vision`），truth 旁路保留为几何/消息链路的自洽检查：
+追踪机下视单目相机（PX4 自带 `x500_mono_cam_down`，airframe 4014）与 YOLO 检测已接入闭环：`ros_gz_bridge` 桥接图像、相机内参和 `/clock`，`vision_detector` 在 conda 常驻 worker 中推理并发布 `/camera/detections`，`vision_adapter` 按图像 stamp 在位姿缓存中插值相机位姿、反投影得到 ENU 下的 `/vision/target_pose`，`guidance_node_2d`（`target_source:=vision`）用 α-β 估计器消费量测、漏检时 coast/hold，不回退 odometry。`vision_source:=truth` 旁路只用于几何与消息链路的自洽检查。
 
-- 追踪机使用 PX4 自带 `x500_mono_cam_down`（airframe 4014）下视单目相机；目标机（`4001/gz_x500`、`-i 1`、`/px4_2`）不变。
-- `ros_gz_bridge` 按固定 `config/camera_bridge.yaml` 桥接 `/camera/image_raw`、`/camera/camera_info` 与 `/clock`；gz 话题名和 frame 已在 P1 核验。
-- `vision_adapter`（`vision_source:=truth`）用完整机体姿态加安装外参构造相机位姿，把目标机 odometry 参考位置投影成伪检测，再由同一处理函数反投影成位置量测。
-- `vision_detector`（`vision_source:=yolo`）订阅图像，在 conda 常驻 worker 里跑 YOLO，发布 `/camera/detections`；`vision_adapter` 按图像 stamp 在位姿缓存里插值取相机位姿，反投影得到 `/vision/target_pose`。
-- `guidance_node_2d`（`target_source:=vision`）用 α-β 估计器消费量测，coast/hold 兜底；`lost` 时零速悬停，不回退 odometry。
-- 输出 `/camera/detections`、`/camera/detections_truth`、`/vision/target_pose`、`vision_samples.csv`、`yolo_detections.csv` 和含估计列的 `gazebo_samples.csv`。
+视觉链路统一 `use_sim_time=true`；公共世界系为 ENU，安装外参、反投影、协方差传播与拒绝原因见 [视觉设计参考](vision_design.md)，启动方式、参数表与验收命令见 [模块 README](../README.md#下视相机与视觉闭环)，离线验证与闭环实测记录见 [视觉验证记录](yolo_vision_closed_loop_results.md)。
 
-几何与时间约定：公共世界系为 ENU，相机光学系为 x 右、y 下、z 前；安装平移和旋转指相机 link 相对机体 FLU。标称安装参数为平移 `[0, 0, 0.10]` m、rpy `[0, 90°, 0]`，来自 PX4 SDF 合并结果与实际运行核验。视觉链路统一 `use_sim_time=true`，位姿缓存按图像 `header.stamp` 插值，超出容差/缓存范围直接拒绝并记录原因；truth 旁路仍用接收时间近邻配对，只验证几何往返和消息封装，不验证渲染、识别或 YOLO 精度。
-
-启动、参数与测试命令统一见 [模块 README](../README.md#下视相机与视觉闭环)，接口约定见 [视觉设计参考](vision_design.md)，历史验证结果见 [视觉验证记录](yolo_vision_closed_loop_results.md)。
-
-真实图像外参验证需要独立图像观测（静态标记、独立像素测量和受控悬停），目前未验证；未完成前不应报告真实视觉误差指标。零样本门槛评估（Recall@IoU、像素误差）由 `tools/vision_offline_eval.py` 在闭环采集的数据集上完成，未完成前不宣称检测精度。标注图、多目标跟踪、TF 与视觉伺服导引不在本轮范围内。
+真实图像外参标定与检测精度门槛评估（`tools/vision_offline_eval.py`）尚未完成，未完成前不报告真实视觉误差指标；标注图、多目标跟踪、TF 与视觉伺服导引不在本轮范围内。
 
 ## 12. Gazebo/PX4 25s 闭环仿真结果
 
-本节结果来自当前仓库中的 Gazebo/PX4 闭环记录：
+本节结果来自生成文档时的一次 Gazebo/PX4 圆周闭环记录，当时输出在：
 
 ```text
-7_2Dsimulation/outputs/gazebo2d/circle/
+outputs/gazebo2d/circle/
 ```
 
-数据口径如下：
+`outputs/` 为生成物、不入库；重跑时输出目录由 `record_output_dir` 决定，视觉闭环建议使用 `outputs/gazebo2d_vision_runs`。数据口径如下：
 
 - 场景：`circle` 圆周机动目标；
 - 仿真时长：25 s；

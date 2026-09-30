@@ -1,16 +1,21 @@
 # 7_2Dsimulation
 
-`7_2Dsimulation` 是二维定高俯瞰追踪仿真。当前版本不使用深度相机和 FOV 约束，追踪机固定高度飞行，导引和指标按 XY 平面计算。
+`7_2Dsimulation` 是二维定高俯瞰追踪仿真。导引不建模深度相机与 FOV 约束：追踪机固定高度飞行，导引和指标按 XY 平面计算。追踪机下视单目相机的 YOLO 视觉闭环已接入（`vision_source:=yolo` + `target_source:=vision`），启动方式与参数见下文。
 
 ## 目录
 
 - `main.py`：纯 Python 离线仿真入口，运行后生成指标 CSV 和图片。
-- `src/pythonsimulation2d/`：2D 目标、动力学、导引、指标和绘图代码。
-- `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包。
-- `outputs/`：默认仿真输出目录。
+- `plot_gazebo_csv.py`：Gazebo 记录 CSV 后处理，生成与离线仿真同类的指标和图片。
+- `plot_vision_csv.py`：视觉链路 CSV 后处理，生成检测率、量测误差和时序图。
+- `src/pythonsimulation2d/`：2D 目标、动力学、导引、估计器和绘图代码。
+- `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
+- `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
+- `tests/`：纯 Python 相机几何与目标估计器测试。
+- `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
+- `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
 - [视觉设计参考](docs/vision_design.md)：相机几何、进程协议与消息约定。
-- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：历史验证结果与待实测项目。
+- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：离线验证结果与 2026-09-30 闭环实测记录。
 
 ## 纯 Python 仿真
 
@@ -74,7 +79,7 @@ colcon build --packages-up-to gazebosimulation2d --cmake-clean-cache --cmake-arg
 colcon build --packages-select gazebosimulation2d
 ```
 
-> `src/px4_msgs` 不随仓库跟踪，需自行放入，且**必须与所用 PX4 版本一致**：开发机 PX4 v1.16 对应 `release/1.16`（`392e831`）。版本不一致时，字段布局变化的 `VehicleLocalPosition` 会被 Fast DDS 直接丢弃（订阅端 0 帧，日志刷 `RTPS_READER_HISTORY: payload 220 > history 207`）；本包导引与视觉链路只订 `vehicle_odometry`，两边布局一致，不受影响。
+> `src/px4_msgs` 不随仓库跟踪，需自行放入，且**必须与所用 PX4 版本一致**：开发机 PX4 v1.16 对应 `release/1.16`（`392e831`）。版本不一致时，字段布局变化的 `VehicleLocalPosition` 会被 Fast DDS 直接丢弃（订阅端 0 帧，日志刷 `RTPS_READER_HISTORY: payload 220 > history 207`）；本包在 px4_msgs 消息里只订阅 `vehicle_odometry`，两边布局一致，不受影响。
 
 加载环境：
 
@@ -121,7 +126,7 @@ PX4 SITL 的 GCS MAVLink 本地端口是 `18570 + 实例号`（`ROMFS/px4fmu_com
 
 当前 2D Gazebo 接入行为：
 
-- 目标机使用位置 + 速度 setpoint 跟随 `pythonsimulation2d.target_state` 生成的二维参考轨迹。
+- 目标机使用位置 + 速度 setpoint 跟随 `pythonsimulation2d.target.target_state()` 生成的二维参考轨迹。
 - 追踪机准备/解锁阶段参考 `6_Simulation`：只发布起飞保持点 setpoint，不提前执行导引；`target_source=vision` 时该保持点取场景起点上方（初始捕获），odometry 模式仍为当前 spawn 位置。
 - 追踪机进入追踪阶段后使用速度 + 加速度 setpoint；二维导引输出的水平加速度作为 PX4 acceleration 前馈发布，position 字段不启用。
 - 导引、记录距离和指标均按 XY 平面计算；追踪阶段 z 速度和 z 加速度指令为 0。
@@ -165,7 +170,7 @@ sudo apt install ros-jazzy-ros-gz-bridge ros-jazzy-vision-msgs ros-jazzy-rqt-ima
 
 追踪机使用 PX4 自带 `x500_mono_cam_down`（airframe 4014，Gazebo 模型实例 `x500_mono_cam_down_0`），目标机用 `x500`（airframe 4001，实例 `x500_1`）。以下终端由使用者手动启动，本仓库的 launch 不会拉起它们。
 
-视觉模式使用仓库内置的**无阴影世界** `worlds/default.sdf`：`<scene><shadows>` 与太阳 `cast_shadows` 都改为 `false`，其余与 PX4 v1.16 的 `default.sdf` 逐字一致。原因：下视相机 8 m 高度、目标平面 1 m 时太阳仰角约 51°，两架无人机的影子会偏移约 5.7 m 投到画面里，YOLO 容易把影子误检成目标。世界名保持 `default`，`config/camera_bridge.yaml` 的 `/world/default/...` 话题不变。
+视觉模式使用仓库内置的**无阴影世界** `worlds/default.sdf`：`<scene><shadows>` 与太阳 `cast_shadows` 都改为 `false`，其余与 PX4 v1.16 的 `default.sdf` 逐字一致。原因：下视相机 8 m 高度、目标平面 1 m 时太阳仰角约 51°，两架无人机的影子会偏移约 5.7 m 投到画面里，YOLO 容易把影子误检成目标。世界名保持 `default`，`src/gazebosimulation2d/config/camera_bridge.yaml` 的 `/world/default/...` 话题不变。
 
 **Gazebo 先于 PX4 手动启动**：PX4 检测到已运行的世界后不会再拉起 Gazebo/GUI，两机只做连接；这样也便于把无阴影世界固定为实验配置。手动启动时 PX4 进程需要自己 source `gz_env.sh`（`px4-rc.gzsim` 只在由它拉起 Gazebo 的分支里 source，否则 `PX4_GZ_MODELS` 为空、模型 spawn 会失败）：
 
@@ -201,9 +206,9 @@ PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_
 说明：
 
 - Gazebo 由终端 3 手动启动，PX4 两机都只连接：实例 0 自动检测已运行的世界，实例 1 带 `PX4_GZ_STANDALONE=1`；不会再起 server 造成冲突。
-- 两机 spawn 的 XY 至少错开约 2 m（示例 `49,0` / `47,0`），避免两个模型在地面重叠。
-- `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `pythonsimulation2d/config.py`），目标机同时被送往同一起点，保证开始跟踪时目标在相机视野内；因此两机 spawn 位置不强制，示例只是缩短准备时间。
-- airframe 自带 `PX4_GZ_WORLD=default`，所以 `config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
+- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `49,0`（追踪机）/ `47,0`（目标机），x 相差 2 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-09-30 实测 ≈ 2 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
+- `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `src/pythonsimulation2d/config.py`），目标机同时被送往同一起点（各自按本地系解释），保证开始跟踪时目标在相机视野内；spawn 错开带来的本地系偏差见上一条。
+- airframe 自带 `PX4_GZ_WORLD=default`，所以 `src/gazebosimulation2d/config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
 - 新环境首次运行相机机型前需 `make px4_sitl gz_x500_mono_cam_down`（本机 SITL 已编译）。
 - 两个实例的 GCS MAVLink 本地端口分别是 18570/18571（见上一节 QGC 备忘录）。
 - 不想手动起 Gazebo 时，也可把 `worlds/default.sdf` 复制覆盖到 PX4 的 `Tools/simulation/gz/worlds/default.sdf`，仍按旧流程由 PX4 拉起；缺点是 PX4 checkout 会带本地改动。
@@ -222,7 +227,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
   algorithm:=pn scenario:=circle \
   enable_camera:=true vision_source:=yolo target_source:=vision use_sim_time:=true \
   yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
-  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   record_output_dir:=outputs/gazebo2d_vision_runs
 ```
 
@@ -248,7 +253,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 | `stats_csv` | outputs/gazebo2d_vision/yolo_detections.csv | 逐处理帧统计 |
 | `yolo_debug_log` / `yolo_debug_log_period_s` | false / 1.0 | launch 参数名（节点内为 `debug_log`） |
 
-### vision_adapter 新增参数（yolo 模式）
+### vision_adapter 参数（yolo 模式）
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -297,20 +302,29 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 ros2 launch gazebosimulation2d guidance.launch.py \
   algorithm:=pn scenario:=circle \
   enable_camera:=true vision_source:=truth target_source:=vision \
-  record_camera:=true
+  record_camera:=true record_output_dir:=outputs/gazebo2d_vision_runs
 ```
 
 记录后可用 worker 自检单帧，快速区分“画面问题”与“模型问题”：
 
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
-  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   --self-test outputs/gazebo2d_vision/camera_frames/<stamp_ns>.jpg
 ```
 
 ### 输出
 
 三个 CSV 输出参数 `record_output_dir`、`vision_record_output_dir`、`yolo_stats_csv`（节点参数为 `stats_csv`）的相对路径统一以 `7_2Dsimulation/` 为基准。因此从仓库根目录启动时，`outputs/...` 也会写入 `7_2Dsimulation/outputs/...`；显式绝对路径保持不变，`ros2 run` 直接运行节点也遵循同一规则。数据集和截图路径仍相对于启动目录，建议按本文示例在 `7_2Dsimulation/` 下运行。
+
+导引记录（节点退出时保存）：
+
+```text
+outputs/gazebo2d/<scenario>/<algorithm>/gazebo_samples.csv               # 默认记录 odometry 基线
+outputs/gazebo2d_vision_runs/<scenario>/<algorithm>/gazebo_samples.csv   # 视觉闭环示例，避免覆盖 odometry 基线
+```
+
+话题与视觉输出：
 
 - `/camera/detections`：`vision_msgs/Detection2DArray`（BEST_EFFORT/VOLATILE），bbox 中心为原图坐标，`class_id="drone"`，未检出发布空数组。
 - `/camera/detections_truth`：truth 伪检测，score=1，bbox 尺寸仅为占位。
@@ -330,8 +344,9 @@ ros2 launch gazebosimulation2d guidance.launch.py \
   algorithm:=pn scenario:=circle \
   enable_camera:=true vision_source:=yolo target_source:=vision use_sim_time:=true \
   yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
-  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
-  record_dataset:=true yolo_save_frame_hz:=10.0
+  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
+  record_dataset:=true yolo_save_frame_hz:=10.0 \
+  record_output_dir:=outputs/gazebo2d_vision_runs
 ```
 
 离线评估（conda python，不需要 ROS；`--dataset` 指向 `.../dataset`）：
@@ -339,7 +354,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python tools/vision_offline_eval.py \
   --dataset outputs/gazebo2d_vision/dataset \
-  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   --output outputs/gazebo2d_vision/eval
 ```
 
@@ -347,13 +362,7 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 
 ### 绘图
 
-```bash
-# 导引记录：含估计列时自动追加 vision_estimate.png
-uv run plot_gazebo_csv.py outputs/gazebo2d_vision_runs/circle --output-dir outputs/circle_vision
-
-# 视觉链路：检测率、像素残差、延迟、丢失时段与拒绝原因
-uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
-```
+`plot_gazebo_csv.py`（导引记录）与 `plot_vision_csv.py`（视觉链路）的用法和输出文件见 [记录后处理与绘图](#记录后处理与绘图)。
 
 ### 验收命令
 
@@ -372,7 +381,7 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 
 ```bash
 /home/srcbit/miniconda3/envs/ultralytics/bin/python src/gazebosimulation2d/scripts/yolo_worker.py \
-  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_caa_p3_dysample_detfly/weights/best.engine \
+  --model /home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   --self-test /home/srcbit/Det-Fly-YOLO-1third/images/val/0207134.jpg
 ```
 
@@ -382,7 +391,7 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 
 - `truth` 只是 odometry 参考位置的自洽旁路，不验证渲染、目标识别或 YOLO 精度；`pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，不是独立标定。
 - 目标可见顶面比 1 m 控制平面高约 0.15 m，反投影有 1.4%～2.2% 的径向偏置，记录在指标中、不做隐蔽补偿。
-- 未实现 TF、多目标跟踪、标注图发布、视觉伺服导引与远距离捕获；本轮不做算法对比实验。
+- 未实现 TF、多目标跟踪、标注图发布、视觉伺服导引与远距离捕获；未做视觉链路与 odometry 基线的对比实验。
 
 离线几何与坐标测试（不需要 ROS/PX4）：
 
@@ -411,30 +420,14 @@ basic, pn, pn_mppi, pn_nmpc
 stationary, linear, circle
 ```
 
-## ROS2 记录输出
+## 记录后处理与绘图
 
-节点退出时默认保存 CSV：
-
-```text
-outputs/gazebo2d/<scenario>/<algorithm>/gazebo_samples.csv
-```
-
-视觉闭环建议用独立目录避免覆盖 odometry 基线（见 `record_output_dir`）：
-
-```text
-outputs/gazebo2d_vision_runs/<scenario>/<algorithm>/gazebo_samples.csv
-```
-
-## Gazebo CSV 绘图
-
-`plot_gazebo_csv.py` 用于把 Gazebo 记录的 `gazebo_samples.csv` 转成与纯 Python 仿真相同类型的指标和图片，不包含 FOV 相关输出；记录含视觉估计列时（`target_est_x` 等）额外生成 `vision_estimate.png`。
-
-按场景目录汇总绘图，输出到 `outputs/circle/`：
+`plot_gazebo_csv.py` 用于把 Gazebo 记录的 `gazebo_samples.csv` 转成与纯 Python 仿真相同类型的指标和图片，不包含 FOV 相关输出。按场景目录汇总绘图：
 
 ```bash
 uv run plot_gazebo_csv.py \
-  outputs/gazebo2d/circle \
-  --output-dir outputs/circle
+  outputs/gazebo2d_vision_runs/circle \
+  --output-dir outputs/circle_vision
 ```
 
 也可以只绘制单个算法的 CSV：
@@ -453,10 +446,11 @@ distance_error.png
 acceleration.png
 yaw_rate.png
 metrics.png
-vision_estimate.png   # 仅当 CSV 含视觉估计列
+vision_estimate.png              # 单算法记录且含视觉估计列时
+vision_estimate_<algorithm>.png  # 多算法场景目录且含视觉估计列时
 ```
 
-视觉链路 CSV（检测率、像素残差、延迟、丢失时段、拒绝原因）：
+视觉链路 CSV（检测率、像素残差、延迟、丢失时段、拒绝原因）由 `plot_vision_csv.py` 处理：
 
 ```bash
 uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
