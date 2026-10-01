@@ -10,6 +10,7 @@
 - `src/pythonsimulation2d/`：2D 目标、动力学、导引、估计器和绘图代码。
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
 - `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
+- `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
 - `tests/`：纯 Python 相机几何与目标估计器测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
 - `outputs/`：默认仿真输出目录（生成物不入库）。
@@ -313,6 +314,30 @@ ros2 launch gazebosimulation2d guidance.launch.py \
   --self-test outputs/gazebo2d_vision/camera_frames/<stamp_ns>.jpg
 ```
 
+### 实时查看画面与检测框（tools/vision_live_view.py）
+
+`vision_detector` 只发布检测框数据，不发布标注图。`tools/vision_live_view.py` 是独立的监控旁路：订阅图像与检测，按 `header.stamp` 回查同一帧画面（检测节点的 stamp 就是它处理的那帧图像 stamp），用 OpenCV 画框、中心点和分数，再发布 `/camera/image_annotated`；不进入导引链路，未检出时画面原样透传。用系统 Python 运行，不需要 colcon build（需要 `numpy`、`cv2`）：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+python3 tools/vision_live_view.py
+
+# 另开终端
+ros2 run rqt_image_view rqt_image_view /camera/image_annotated
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--image-topic` | /camera/image_raw | 相机图像话题 |
+| `--detections-topic` | /camera/detections | 检测话题；truth 模式传 /camera/detections_truth |
+| `--output-topic` | /camera/image_annotated | 标注图输出（bgr8，RELIABLE + KEEP_LAST(1)） |
+| `--cache-size` | 60 | 图像缓存帧数（检测按 stamp 回查） |
+| `--match-tolerance-s` | 0.05 | 没有严格同 stamp 帧时允许配对的最近帧时间差；0 表示只接受严格同 stamp |
+| `--show` | false | 额外打开 OpenCV 窗口（WSL2 需 WSLg） |
+
+输出频率约等于 `yolo_process_hz`（检测节点每个处理帧都会发消息），显示的是与框同 stamp 的那帧画面，不会把上一帧的框画到当前帧上；truth 伪检测的 stamp 来自生成时刻，走 0.05 s 容差的最近帧配对。
+
 ### 输出
 
 三个 CSV 输出参数 `record_output_dir`、`vision_record_output_dir`、`yolo_stats_csv`（节点参数为 `stats_csv`）的相对路径统一以 `7_2Dsimulation/` 为基准。因此从仓库根目录启动时，`outputs/...` 也会写入 `7_2Dsimulation/outputs/...`；显式绝对路径保持不变，`ros2 run` 直接运行节点也遵循同一规则。数据集和截图路径仍相对于启动目录，建议按本文示例在 `7_2Dsimulation/` 下运行。
@@ -328,6 +353,7 @@ outputs/gazebo2d_vision_runs/<scenario>/<algorithm>/gazebo_samples.csv   # 视�
 
 - `/camera/detections`：`vision_msgs/Detection2DArray`（BEST_EFFORT/VOLATILE），bbox 中心为原图坐标，`class_id="drone"`，未检出发布空数组。
 - `/camera/detections_truth`：truth 伪检测，score=1，bbox 尺寸仅为占位。
+- `/camera/image_annotated`：`tools/vision_live_view.py` 输出的实时标注图（bgr8，RELIABLE），仅在该工具运行时存在。
 - `/vision/target_pose`：`geometry_msgs/PoseWithCovarianceStamped`，frame=`enu`；XY 协方差来自像素噪声传播，姿态用单位四元数占位。
 - `outputs/gazebo2d_vision/vision_samples.csv`：逐量测/拒绝记录（truth/yolo 共用；truth 行的新增列全为 NaN）。
 - `outputs/gazebo2d_vision/yolo_detections.csv`：逐处理帧的检测与延迟。
@@ -391,7 +417,7 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 
 - `truth` 只是 odometry 参考位置的自洽旁路，不验证渲染、目标识别或 YOLO 精度；`pixel_error_vs_truth_px` / `position_error_vs_odom_m` 与量测同源，不是独立标定。
 - 目标可见顶面比 1 m 控制平面高约 0.15 m，反投影有 1.4%～2.2% 的径向偏置，记录在指标中、不做隐蔽补偿。
-- 未实现 TF、多目标跟踪、标注图发布、视觉伺服导引与远距离捕获；未做视觉链路与 odometry 基线的对比实验。
+- 未实现 TF、多目标跟踪、标注图发布（已由 `tools/vision_live_view.py` 旁路提供）、视觉伺服导引与远距离捕获；未做视觉链路与 odometry 基线的对比实验。
 
 离线几何与坐标测试（不需要 ROS/PX4）：
 
