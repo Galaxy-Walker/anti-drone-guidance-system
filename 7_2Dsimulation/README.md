@@ -146,7 +146,7 @@ param save                # 可选，参数变更后 PX4 会自动保存
 
 参数按实例存储（`PX4-Autopilot/build/px4_sitl_default/rootfs/<实例号>/parameters.bson`），设置一次后重启仍生效。代价是关闭 GCS 链路丢失失效保护，仅用于 SITL，不要照搬到 8_MoCap 真机。
 
-想保留 failsafe 时可提供任意 MAVLink GCS 心跳源，不必是 QGC：在 WSL 里运行 Linux 版 QGC（默认连 `127.0.0.1:14550`，绕开 Windows NAT 问题），或用 pymavlink 定时向 `127.0.0.1:18570` / `18571` 发送 `HEARTBEAT`（`MAV_TYPE_GCS`）。`COM_DLL_EXCEPT` 只在飞行中生效，解锁检查仍然看 `NAV_DLL_ACT`，不能解决本问题。
+想保留 failsafe 时可提供任意 MAVLink GCS 心跳源，不必是 QGC：在 WSL 里运行 Linux 版 QGC（默认连 `127.0.0.1:14550`，绕开 Windows NAT 问题），或用 pymavlink 定时向 `127.0.0.1:18570` / `18571` 发送 `HEARTBEAT`（`MAV_TYPE_GCS`）。仓库提供等价的纯标准库脚本，无需安装 pymavlink：`python3 tools/px4_gcs_heartbeat.py`（默认向 18570/18571 各发 1 Hz 心跳，Ctrl-C 退出）。`COM_DLL_EXCEPT` 只在飞行中生效，解锁检查仍然看 `NAV_DLL_ACT`，不能解决本问题。
 
 当前 2D Gazebo 接入行为：
 
