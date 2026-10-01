@@ -125,6 +125,29 @@ PX4 SITL 的 GCS MAVLink 本地端口是 `18570 + 实例号`（`ROMFS/px4fmu_com
 
 - WSL IP 在 NAT 模式下每次 `wsl --shutdown` 后都可能变化，变了要同步改 QGC 的 Target Host。
 
+### 不启动 QGC 直接起飞（NAV_DLL_ACT）
+
+QGC 只用于监控，解锁和 Offboard 由导引节点自己发送（`auto_arm` / `auto_offboard` 默认开启）；但在没有任何 MAVLink 地面站发送 GCS 心跳时，两机都会被 PX4 拒绝解锁：
+
+```text
+Preflight Fail: No connection to the ground control station
+Arming denied: Resolve system health failures first
+```
+
+原因是 Gazebo 机型 4001 的 airframe 设了 `param set-default NAV_DLL_ACT 2`（`ROMFS/px4fmu_common/init.d-posix/airframes/4001_gz_x500`，4014 会 source 4001、同样继承），而 `NAV_DLL_ACT > 0` 时 PX4 把收到过 GCS 心跳作为解锁前置条件（`src/modules/commander/HealthAndArmingChecks/checks/rcAndDataLinkCheck.cpp`）：commander 启动时 `gcs_connection_lost` 为 true，只有 GCS 心跳能清除它。本仓库的 ROS 2 链路走 XRCE-DDS、不产生 MAVLink 心跳；导引节点预热后只发一次 ARM、不检查 ack 也不重试，所以会一直停在准备阶段（`startup_2d ... pursuer_ready=false`），不会起飞。
+
+不接 QGC 时，在每个实例的 PX4 终端（`pxh>`）各执行一次。要在 `ros2 launch` 首次发 ARM 之前完成；已经被拒的话，改完参数后重启 launch：
+
+```text
+param set NAV_DLL_ACT 0
+param show NAV_DLL_ACT
+param save                # 可选，参数变更后 PX4 会自动保存
+```
+
+参数按实例存储（`PX4-Autopilot/build/px4_sitl_default/rootfs/<实例号>/parameters.bson`），设置一次后重启仍生效。代价是关闭 GCS 链路丢失失效保护，仅用于 SITL，不要照搬到 8_MoCap 真机。
+
+想保留 failsafe 时可提供任意 MAVLink GCS 心跳源，不必是 QGC：在 WSL 里运行 Linux 版 QGC（默认连 `127.0.0.1:14550`，绕开 Windows NAT 问题），或用 pymavlink 定时向 `127.0.0.1:18570` / `18571` 发送 `HEARTBEAT`（`MAV_TYPE_GCS`）。`COM_DLL_EXCEPT` 只在飞行中生效，解锁检查仍然看 `NAV_DLL_ACT`，不能解决本问题。
+
 当前 2D Gazebo 接入行为：
 
 - 目标机使用位置 + 速度 setpoint 跟随 `pythonsimulation2d.target.target_state()` 生成的二维参考轨迹。
@@ -176,7 +199,7 @@ sudo apt install ros-jazzy-ros-gz-bridge ros-jazzy-vision-msgs ros-jazzy-rqt-ima
 **Gazebo 先于 PX4 手动启动**：PX4 检测到已运行的世界后不会再拉起 Gazebo/GUI，两机只做连接；这样也便于把无阴影世界固定为实验配置。手动启动时 PX4 进程需要自己 source `gz_env.sh`（`px4-rc.gzsim` 只在由它拉起 Gazebo 的分支里 source，否则 `PX4_GZ_MODELS` 为空、模型 spawn 会失败）：
 
 ```bash
-# 终端 1（可选）：QGC 监控两机；WSL2 下按上一节备忘录配置 18570/18571 两条链路
+# 终端 1（可选）：QGC 监控两机（不接 QGC 时按上一节设置 NAV_DLL_ACT）；WSL2 下按 QGC 备忘录配置 18570/18571 两条链路
 
 # 终端 2：Micro XRCE-DDS Agent（先于 PX4 启动）
 MicroXRCEAgent udp4 -p 8888
@@ -192,7 +215,7 @@ gz sim -r -s /home/srcbit/anti-drone/anti-drone-guidance-system/7_2Dsimulation/w
 export GZ_CONFIG_PATH=/usr/share/gz
 cd /home/srcbit/anti-drone/PX4-Autopilot
 source build/px4_sitl_default/rootfs/gz_env.sh
-PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="49,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
+PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="48,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
   ./build/px4_sitl_default/bin/px4 -i 0
 # 等本终端出现 "INFO  [init] Gazebo world is ready" 和 "Spawning model" 后再启动目标机
 
@@ -207,7 +230,7 @@ PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_
 说明：
 
 - Gazebo 由终端 3 手动启动，PX4 两机都只连接：实例 0 自动检测已运行的世界，实例 1 带 `PX4_GZ_STANDALONE=1`；不会再起 server 造成冲突。
-- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `49,0`（追踪机）/ `47,0`（目标机），x 相差 2 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-09-30 实测 ≈ 2 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
+- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `48,0`（追踪机）/ `47,0`（目标机），x 相差 1 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-09-30 实测 ≈ 2 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
 - `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `src/pythonsimulation2d/config.py`），目标机同时被送往同一起点（各自按本地系解释），保证开始跟踪时目标在相机视野内；spawn 错开带来的本地系偏差见上一条。
 - airframe 自带 `PX4_GZ_WORLD=default`，所以 `src/gazebosimulation2d/config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
 - 新环境首次运行相机机型前需 `make px4_sitl gz_x500_mono_cam_down`（本机 SITL 已编译）。
