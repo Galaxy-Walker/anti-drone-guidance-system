@@ -204,6 +204,8 @@ circle_vision/                            # 绘图与 metrics.csv
 
 结论：调整后的 EMPC 在两种起始方式和重复运行下最大水平误差 2.4～2.8 m，全程满足 ≤ 5 m；默认参数只在"悬停就位"这一种起始方式下达标。代价是控制更激进、更贴近 PN 趋势（`pn_nmpc` 的 yaw rate mean 不再是四算法中最低），离线捕获时间和控制能量反而下降，见 [算法说明](2d_simulation_guidance_overview.md) 第 10 节。原始记录在 `outputs/tuning_runs/`（生成物，不入库）。
 
+同一天还跑了一轮**四算法各 40 s 的视觉闭环对照**（调参后参数，`target_source=vision`）：EMPC 最大水平距离 3.06 m、平均 1.30 m，均为四者最低；MPPI 控制能量与 yaw rate 最低但最大距离 13.59 m。四算法的导引侧指标、统计口径与原点偏置说明见 [算法说明](2d_simulation_guidance_overview.md) 12.1～12.2 节。
+
 ## 5. 已知边界与风险
 
 - **零样本域差异是最大风险**：Det-Fly 是真实天空背景侧视图，Gazebo 是俯视渲染；P3 门槛不达标时再评估是否需要域适配微调。

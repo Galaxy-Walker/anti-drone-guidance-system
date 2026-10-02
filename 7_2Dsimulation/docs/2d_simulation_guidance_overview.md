@@ -49,6 +49,18 @@
 - `src/gazebosimulation2d/config/default.yaml` 与 `src/gazebosimulation2d/launch/guidance.launch.py` 暴露了启动就位阈值、调试日志周期和记录目录等参数。
 - Gazebo 记录结果保存为 `outputs/gazebo2d/<scenario>/<algorithm>/gazebo_samples.csv`，可由 `plot_gazebo_csv.py` 后处理。
 
+视觉量测链路（`enable_camera:=true` 时按 `vision_source` 创建，详见 11.5 节与 [视觉设计参考](vision_design.md)）：
+
+| 文件 | 功能 |
+| --- | --- |
+| `vision_detector.py` | 订阅图像、按 `process_hz` 节流，把帧交给 conda 常驻 YOLO worker，发布 `/camera/detections` |
+| `scripts/yolo_worker.py` | 常驻推理子进程（stdio 协议），加载 `.engine`/`.pt`，超时/崩溃按上限重启 |
+| `vision_adapter.py` | 消费检测结果，按图像 stamp 在位姿缓存中插值相机位姿，反投影并发布 `/vision/target_pose` |
+| `camera_recorder.py` | 旁路记录相机画面（JPEG），用于区分"模型漏检"与"目标不在视野" |
+| `image_utils.py`、`sim_clock.py`、`recording_paths.py` | 图像编码转换、`/clock` 防呆与统一输出路径解析 |
+
+`worlds/default.sdf` 是仓库内置的无阴影世界（相对 PX4 v1.16 的 `default.sdf` 只关闭阴影投射）。下视相机 8 m 高度、目标平面 1 m 时太阳仰角约 51°，两机影子会偏移约 5.7 m 落进画面，YOLO 容易把影子误检成目标，因此视觉闭环必须使用该世界。
+
 ## 3. 坐标系与状态变量定义
 
 ### 3.1 二维定高仿真坐标系
@@ -134,6 +146,16 @@ yaw 用于描述二维俯瞰平面内的机头朝向。每个仿真步中，追�
 | `debug_log` | false | 是否开启追踪阶段 `debug_2d` 周期日志 |
 | `debug_log_period_s` | 0.2 s | `debug_2d` 日志周期 |
 | `startup_log_period_s` | 1.0 s | 启动阶段 `startup_2d` 日志周期 |
+
+视觉闭环相关参数（`target_source:=vision` 时生效）由同一组 YAML 与 launch 提供，完整表见 [模块 README](../README.md#导引节点视觉参数target_sourcevision)：
+
+| 参数 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `target_source` | odometry | 导引输入来源：`odometry`（读目标机 odometry）或 `vision`（读 `/vision/target_pose`） |
+| `vision_alpha` / `vision_beta` | 0.85 / 0.25 | α-β 估计器系数（需满足 `0 < beta < 4 - 2*alpha`） |
+| `vision_accel_tau_s` | 0.5 s | 目标加速度前馈的一阶低通时间常数 |
+| `vision_max_age_s` | 0.5 s | 量测到控制周期的时延上限，超限按过期丢弃 |
+| `vision_coast_s` / `vision_loss_s` | 0.3 / 1.0 s | `tracking → coast → lost` 的状态机阈值 |
 
 ## 5. 目标运动场景设计
 
@@ -339,7 +361,15 @@ $$
 
 在离线仿真中，EMPC 利用 `target_state()` 给出的当前目标加速度进行常加速度外推，而 MPPI 使用恒速外推。MPPI 未加入速度匹配项是当前代价函数的设计选择，并非恒速预测模型的必然结果。
 
-需要区分离线与 Gazebo 接入：当前 `guidance_node.py` 从 `VehicleOdometry` 构造目标状态时将 `target.acceleration` 置为零，且导引计算传入的是目标实际 odometry 状态。因此 Gazebo 中 EMPC 的目标预测当前实际退化为基于实测位置、速度的恒速外推；解析圆周参考轨迹中的向心加速度只用于目标参考生成和调试显示，未传入追踪机 EMPC 预测器。
+需要区分目标状态的来源，三种情况下传给 EMPC 预测器的目标加速度 `a_t0` 并不相同：
+
+| 场景 | 传入 EMPC 的目标状态 | 预测器的实际行为 |
+| --- | --- | --- |
+| 离线纯 Python 仿真 | 解析轨迹状态，含解析加速度 | 常加速度外推 |
+| Gazebo，`target_source=odometry`（默认） | 目标机 `VehicleOdometry`，`acceleration` 置零 | 退化为基于实测位置、速度的恒速外推 |
+| Gazebo，`target_source=vision`（视觉闭环） | α-β 估计器的位置/速度，以及低通差分加速度 | 常加速度外推，加速度为在线估计值 |
+
+也就是说：odometry 模式下解析圆周参考轨迹里的向心加速度只用于目标参考生成和调试显示（`target_cmd` 日志），并未传入追踪机的 EMPC 预测器；而视觉闭环下目标加速度来自 `vision_accel_tau_s = 0.5 s` 的一阶低通差分估计，EMPC 用的是在线估计而不是真值。
 
 ## 8. 性能评价指标
 
@@ -353,7 +383,7 @@ $$
 | `yaw_rate_mean` | 平均 yaw 角速度绝对值 | 越小越平滑 |
 | `yaw_rate_variance` | yaw 角速度方差 | 越小越平滑 |
 
-注意：本部分不包含 FOV 可见率、目标丢失时长等指标；这些指标属于三维有限视场仿真问题，在当前二维定高版本中未建模。
+注意：上表是**导引侧**指标，本部分不建模深度相机与 FOV 可见率（那属于三维有限视场仿真问题）。视觉闭环另外产出**量测侧**指标——帧级检出率、最长连续丢失、量测时延与拒绝原因分布——由 `plot_vision_csv.py` 处理 `vision_samples.csv` / `yolo_detections.csv` 得到，实测值见 [视觉验证记录](yolo_vision_closed_loop_results.md)；第 12 节给出同一批跑批的导引侧指标。
 
 ## 9. 离线 Python 仿真流程
 
@@ -424,9 +454,9 @@ outputs/<scenario>/
 | 算法 | 捕获时间/s | 最小距离/m | 控制能量 | 平均距离/m | 路径长度/m | yaw rate mean/rad/s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2D direct pursuit | 9.50 | 0.0060 | 1216.61 | 4.62 | 155.11 | 1.279 |
-| 2D PN | 5.60 | 0.0005 | 1132.97 | 4.98 | 159.01 | 1.215 |
-| 2D PN + MPPI | 5.50 | 0.0008 | 1032.30 | 4.89 | 158.40 | **1.222** |
-| **2D PN + EMPC** | **4.85** | **0.0001** | **520.21** | **3.84** | **153.82** | 1.298 |
+| 2D PN | 5.60 | 0.0003 | 1129.50 | 4.98 | 158.91 | 1.215 |
+| 2D PN + MPPI | 5.50 | 0.0007 | 1030.13 | 4.89 | 158.31 | **1.222** |
+| **2D PN + EMPC** | **4.85** | **0.0002** | **520.84** | **3.84** | **153.81** | 1.291 |
 
 圆周目标持续改变 LOS 方向，是二维追踪中更困难的场景。调参后的 EMPC 捕获时间最短、控制能量和平均距离最低，路径长度也最短；yaw 平滑性仍明显好于 basic/PN，但略逊于 MPPI。
 
@@ -554,7 +584,9 @@ ros2 launch gazebosimulation2d guidance.launch.py debug_log:=true debug_log_peri
 
 ### 11.4 Gazebo 数据记录与后处理
 
-Gazebo CSV 字段包括：时间、两机位置速度、追踪机实际发布的加速度指令、yaw 和 XY 距离。后处理命令示例：
+Gazebo CSV 的基础字段包括：时间、两机位置速度、追踪机实际发布的加速度指令、yaw 和 `distance_xy`。`target_source=vision` 时同一份 CSV 还会追加视觉列：`guidance_target_source`、`target_est_x/y`（以及 `target_est_vx/vy`、`target_est_ax/ay`）、`vision_valid`、`vision_age_s`、`vision_latency_s`、`vision_measurements` 和 `vision_error_xy`。**注意 `target_x/target_y` 始终是目标机 odometry 真值**，不是控制器实际消费的量；控制器在视觉模式下用的是 `target_est_*`（追踪机本体系），而 `vision_error_xy` 是"视觉估计 vs 目标 odometry"的跨机诊断量，含两机本地系原点差，不能当作量测精度。
+
+后处理命令示例：
 
 ```bash
 # 默认导引记录（odometry 基线）
@@ -566,9 +598,15 @@ uv run plot_gazebo_csv.py \
 uv run plot_gazebo_csv.py \
   outputs/gazebo2d_vision_runs/circle \
   --output-dir outputs/circle_vision
+
+# 视觉链路本身（检出率、像素/位置残差、时延、丢失时段、拒绝原因）
+uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
 ```
 
-`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。
+`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。两个口径需要注意：
+
+- **dt**：`plot_gazebo_csv.py` 用**第一个**跑批推断出的单一采样间隔渲染全部算法（`--dt` 可显式覆盖），而记录时间戳存在 ±4 ms 抖动；逐跑批统计控制能量或 yaw rate 时应按跑批各自的中位间隔（或逐样本 Δt 积分）计算，否则 MPPI/EMPC 这类数值会差约 8%。
+- **捕获时间**：`target_source=vision` 的初始捕获流程会让两机在 t=0 时已落在 1.5 m 捕获半径内，捕获时间恒为 0，评估视觉闭环时应改用最大/平均水平距离。
 
 ### 11.5 下视相机与视觉闭环
 
@@ -578,9 +616,48 @@ uv run plot_gazebo_csv.py \
 
 真实图像外参标定与检测精度门槛评估（`tools/vision_offline_eval.py`）尚未完成，未完成前不报告真实视觉误差指标；标注图、多目标跟踪、TF 与视觉伺服导引不在本轮范围内。
 
-## 12. Gazebo/PX4 25s 闭环仿真结果
+## 12. Gazebo/PX4 视觉闭环仿真结果（40 s 圆周场景）
 
-> 说明：本节数字来自 EMPC 预测窗口/权重调参之前的一次 odometry 闭环记录（25 s 窗口），仅作历史参考。调参后的 EMPC 行为已不同，最新结论以第 10 节的离线结果和 [视觉验证记录](yolo_vision_closed_loop_results.md) 的 YOLO 闭环实测为准。
+> 本节数据来自 2026-10-01 的**视觉在环**闭环实测，EMPC/MPPI 已采用调参后的预测窗口与权重（`horizon_steps = 8`、`nmpc_w_path = 0.5`、`nmpc_w_pn = 1.0`）。追踪机只消费 `/vision/target_pose`（下视相机 → YOLO 检测 → 反投影 → α-β 估计），不消费仿真真值：四个跑批 CSV 的 `guidance_target_source` 列全为 `vision`，量测侧统计见 [视觉验证记录](yolo_vision_closed_loop_results.md)。调参前的 25 s odometry 记录保留在 12.4 节。
+
+### 12.1 数据口径
+
+- 场景：`circle` 圆周机动目标，四种算法各跑一次，每次 40 s；标称 20 Hz 控制与记录频率，每跑批 801～802 条样本，时间列 0.0～40.0 s；
+- 原始记录：`outputs/gazebo2d_vision_runs/circle/<algorithm>/gazebo_samples.csv`（`outputs/` 为生成物、不入库）；
+- 指标定义沿用离线仿真的 XY 口径：最小/最大/平均 `distance_xy`、`sum(ax²+ay²)·Δt`、`sum(|Δp_xy|)`、`mean(|wrap(Δyaw)/Δt|)`；
+- **Δt 取该跑批时间列的中位采样间隔**（basic/pn 为 0.048 s，pn_mppi/pn_nmpc 为 0.052 s；记录时间戳存在 ±4 ms 抖动，平均间隔为 0.05 s），控制能量与 yaw rate 两列按此缩放。若改按逐样本 Δt 积分，四个跑批的控制能量为 1289.42 / 1250.25 / 425.23 / 602.93，与本表相差不超过 8%，结论不变；`plot_gazebo_csv.py` 渲染同样的量时使用单一推断 dt，细节见 11.4 节；
+- **不报告捕获时间**：`target_source=vision` 的初始捕获流程会把追踪机送到场景起点上方，两机在 t=0 时相距仅 0.10～0.39 m、已经在 1.5 m 捕获半径内，四算法的捕获时间都是 0.00 s、没有区分度，因此改用**最大水平距离**反映全程跟踪质量；
+- **跨机距离带常值偏置**：`distance_xy` 由两机各自 PX4 本地系的 odometry 相减得到，两机 spawn 不同点（本次相差 1 m）会让该列整体偏约 1 m。本跑批 `target_est − target_odom` 的 x 分量为 −0.87～−1.14 m（标准差 0.36～0.73 m；均值来自原点差，标准差来自估计滞后与噪声）。控制器消费的是**追踪机本体系**的视觉估计、不受该偏置影响，但本节绝对距离数字必须连同这一口径解读，不能当作量测精度。
+
+### 12.2 圆周目标场景指标
+
+| 算法 | 最小距离/m | 最大距离/m | 控制能量 | 平均距离/m | 路径长度/m | yaw rate mean/rad/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2D direct pursuit | 0.0266 | 5.38 | 1238.18 | 2.39 | 155.03 | 1.574 |
+| 2D PN | 0.0506 | 5.18 | 1202.82 | 1.98 | 151.59 | 1.807 |
+| 2D PN + MPPI | 0.0938 | 13.59 | **443.37** | 5.70 | **126.00** | **0.437** |
+| **2D PN + EMPC** | 0.0493 | **3.06** | 627.95 | **1.30** | 130.05 | 1.061 |
+
+主要现象：
+
+- **2D PN + EMPC 跟踪精度最好**：最大水平距离 3.06 m、平均距离 1.30 m 均为四者最低，说明调参后的候选式预测控制在真实 PX4 + 视觉量测的闭环里能稳定贴住机动目标；
+- **2D PN + MPPI 用精度换能耗与平滑**：控制能量（443.37）、路径长度（126.00 m）和 yaw rate mean（0.437）三项最低，但最大距离 13.59 m、平均距离 5.70 m 明显掉队。这与它的代价函数不含速度匹配项与后半窗口稳态项（见 7.5 节）一致：面对持续机动的圆周目标时更容易稳定在外侧大圈。
+- **basic 与 PN 居中**：最大距离 5.2～5.4 m、平均 2.0～2.4 m，但控制能量（1202.82 / 1238.18）与 yaw rate mean（1.574 / 1.807）都是四者最高，即"一直用力追、精度却不如 EMPC"；
+- **量测不连续时闭环仍然稳定**：四个跑批中估计器可用（tracking 或 coast）的控制周期占比为 0.894～0.981；量测从图像 stamp 到被控制周期消费的时延 p50 为 0.13～0.20 s，超过 `vision_max_age_s = 0.5 s` 的量测按过期丢弃，估计器继续 coast、超过 `vision_loss_s = 1.0 s` 才进入 hold，40 s 内没有出现发散或失控。
+
+与第 10 节离线圆周场景相比结论方向一致（EMPC 精度占优、MPPI 更省控制），但绝对数值不可直接比较：离线从 47 m 外接近目标、统计窗口包含接近段，而视觉闭环在 t=0 时两机已经贴在一起；闭环还要额外承受 PX4 底层控制滞后、setpoint 跟踪误差与量测丢失。
+
+### 12.3 视觉闭环插图
+
+![Gazebo vision circle trajectories 2x2](assets/gazebo_vision_circle_trajectories_2x2.png)
+
+![Gazebo vision circle distance error](assets/gazebo_vision_circle_distance_error.png)
+
+![Gazebo vision circle acceleration](assets/gazebo_vision_circle_acceleration.png)
+
+### 12.4 历史参考：调参前的 25 s odometry 闭环记录
+
+> 以下数字来自 EMPC 预测窗口/权重调参**之前**的一次 odometry 闭环记录（25 s 窗口，追踪机直接读目标机 odometry），已被 12.1～12.3 节的视觉闭环结果取代，仅作对照保留；其统计窗口与参数版本都与 12.2 节不同，不可逐项对比。
 
 本节结果来自生成文档时的一次 Gazebo/PX4 圆周闭环记录，当时输出在：
 
@@ -597,8 +674,6 @@ outputs/gazebo2d/circle/
 - 四个算法的原始 CSV 均包含 502 条样本，时间范围为 0.0 s 到 25.0 s；
 - 指标计算沿用离线仿真的 XY 水平距离、捕获半径、控制能量和 yaw rate 统计方式。
 
-### 12.1 圆周目标场景 Gazebo 指标
-
 | 算法 | 捕获时间/s | 最小距离/m | 控制能量 | 平均距离/m | 路径长度/m | yaw rate mean/rad/s | yaw rate variance |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2D direct pursuit | 10.90 | 0.0370 | 648.97 | 8.89 | 113.42 | 1.415 | 1.896 |
@@ -606,23 +681,16 @@ outputs/gazebo2d/circle/
 | **2D PN + MPPI** | **5.90** | 0.0197 | 250.27 | 7.83 | 101.60 | 0.822 | 1.312 |
 | 2D PN + EMPC | 6.00 | 0.0781 | **174.84** | **7.82** | **96.54** | **0.340** | **0.399** |
 
-在 25 s Gazebo 圆周目标闭环仿真中，四种算法均完成 XY 捕获。主要现象为：
+在 25 s Gazebo 圆周目标闭环仿真中，四种算法均完成 XY 捕获，主要现象为：
 
 - **2D direct pursuit** 捕获时间最长，控制能量和 yaw rate mean 也较高，体现出追赶式轨迹在机动目标下效率较低；
 - **2D PN** 最小距离最低，说明其比例导引几何在闭环 PX4 环境中仍能形成有效拦截，但控制能量和 yaw rate 方差较高；
 - **2D PN + MPPI** 捕获时间最短，同时相对 basic/PN 明显降低控制能量和 yaw 转向强度；
 - **2D PN + EMPC** 捕获时间略慢于 MPPI，但控制能量、平均距离、路径长度、yaw rate mean 和 yaw rate 方差均为当前 Gazebo 输出中最优，表现出更偏向低能耗和平滑跟踪的取舍。
 
-这些 Gazebo 结果与离线圆周场景的总体趋势一致：MPPI 更激进、捕获更快；EMPC 更平滑、更省控制，但在最小距离或首次捕获时间上不一定最优。需要注意，Gazebo 结果同时受到 PX4 底层控制、机体模型、setpoint 跟踪误差和 25 s 统计窗口影响，因此不应与 40 s 离线质点仿真的绝对数值直接等同。
+这些 Gazebo 结果与离线圆周场景的总体趋势一致：MPPI 更激进、捕获更快；EMPC 更平滑、更省控制，但在最小距离或首次捕获时间上不一定最优。需要注意，该记录同时受到调参前的 EMPC/MPPI 参数、PX4 底层控制、机体模型、setpoint 跟踪误差和 25 s 统计窗口影响，因此不应与 40 s 离线质点仿真或 12.2 节的视觉闭环结果逐项对比。
 
-### 12.2 Gazebo 综合对比插图
-
-以下插图来自：
-
-```text
-outputs/gazebo2d/circle/total/
-```
-
+以下插图同样来自那次调参前的记录（`outputs/gazebo2d/circle/total/`），保留作历史对照：
 ![Gazebo circle XY trajectory](assets/gazebo_circle_trajectory_xy.png)
 
 ![Gazebo circle distance error](assets/gazebo_circle_distance_error.png)
@@ -641,7 +709,10 @@ outputs/gazebo2d/circle/total/
 - yaw 只表示水平机头朝向，不包含完整 roll/pitch/yaw 姿态动力学。
 - 离线仿真采用质点模型，Gazebo 结果会受到 PX4 底层控制器、机体模型、setpoint 跟踪误差和通信频率影响。
 - 当前 Gazebo 追踪阶段不再通过 position setpoint 强制拉住追踪机高度，而是发布 z 速度和 z 加速度为 0 的 velocity + acceleration setpoint；实际高度保持效果取决于 PX4 底层控制器与机体响应。
-- MPPI 与 EMPC 的结果依赖预测窗口、权重、候选集合、采样数、噪声尺度和温度参数。
+- MPPI 与 EMPC 的结果依赖预测窗口、权重、候选集合、采样数、噪声尺度和温度参数；本文只报告调参后的这一组参数，未做窗口/权重的敏感性扫描。
+- 目标运动只覆盖静止、匀速直线与匀速圆周三类，**不包含急转、换向、加减速等高 jerk 机动**；在高机动场景下的结论尚未验证。
+- 视觉闭环的检测来自渲染图像、目标按解析轨迹运动，未建模运动模糊、光照变化与背景杂波；跨机距离列还带两机本地系原点差（见 12.1 节），因此视觉闭环的距离指标只能在同一口径内横向比较。
+- 两机在视觉闭环中的初始条件（起飞就位方式、spawn 间隔）会影响早期几秒的误差，比较不同跑批时应先确认这两项一致。
 
 ## 14. 章节推荐结构
 
@@ -663,6 +734,9 @@ X.5 离线数值仿真结果与分析
   X.5.3 圆周机动目标场景
   X.5.4 综合分析
 X.6 PX4/Gazebo 二维闭环仿真设计
+  X.6.1 视觉量测链路与视觉—控制映射
 X.7 Gazebo/PX4 闭环仿真结果
+  X.7.1 视觉在环闭环结果（40 s 圆周）
+  X.7.2 调参前的 odometry 对照记录（可选）
 X.8 仿真结论与局限性
 ```
