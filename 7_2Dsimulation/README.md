@@ -1,6 +1,6 @@
 # 7_2Dsimulation
 
-`7_2Dsimulation` 是二维定高俯瞰追踪仿真。导引不建模深度相机与 FOV 约束：追踪机固定高度飞行，导引和指标按 XY 平面计算。追踪机下视单目相机的 YOLO 视觉闭环已接入（`vision_source:=yolo` + `target_source:=vision`），启动方式与参数见下文。
+`7_2Dsimulation` 是二维定高俯瞰追踪仿真。追踪机固定高度飞行，导引和指标按 XY 平面计算，不建立完整的深度/FOV 可见性模型；EMPC（`pn_nmpc`）的代价函数包含固定下视相机的软性画面保持（FOV）惩罚，目标接近画幅边缘时主动回中（见 [算法说明](docs/2d_simulation_guidance_overview.md) 7.4.1 节）。追踪机下视单目相机的 YOLO 视觉闭环已接入（`vision_source:=yolo` + `target_source:=vision`），启动方式与参数见下文。
 
 ## 目录
 
@@ -11,7 +11,7 @@
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
 - `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
 - `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
-- `tests/`：纯 Python 相机几何与目标估计器测试。
+- `tests/`：纯 Python 相机几何、目标估计器与 EMPC 画面保持（FOV）惩罚测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
 - `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
@@ -468,6 +468,8 @@ basic, pn, pn_mppi, pn_nmpc
 ```text
 stationary, linear, circle
 ```
+
+`pn_nmpc` 是候选枚举式预测控制（文档称 EMPC），代价函数除距离、控制、平滑和 PN 趋势项外还包含画面保持（FOV）惩罚：把预测目标投影到标称下视相机的图像平面，归一化偏移超过软边界后加重回中、接近边缘时惩罚最强。权重与相机参数在 `src/pythonsimulation2d/config.py` 的 `nmpc_w_fov`、`fov_*` 字段中，原理与 Gazebo 验证见 [算法说明](docs/2d_simulation_guidance_overview.md) 7.4.1 和 12.5 节。
 
 ## 记录后处理与绘图
 

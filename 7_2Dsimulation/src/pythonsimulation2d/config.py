@@ -80,6 +80,23 @@ class GuidanceConfig:
     # 偏离 PN 趋势的惩罚：真实闭环下内部模型不可靠，权重提高让 NMPC 在拿不准时
     # 跟随已被验证的 2D PN 趋势（候选集合里仍保留 pn_trend），避免自选动作持续失效。
     nmpc_w_pn: float = 1.0
+    # EMPC 画面保持（FOV）惩罚：把预测目标投影到固定下视相机的图像平面，
+    # 归一化偏移（±1 为画面边缘）超过软边界后按平方惩罚，让目标贴近边缘时主动回中。
+    # 相机模型采用 x500_mono_cam_down 的标称下视安装与 P1 核验内参，见 docs/vision_design.md 1.1；
+    # 更换相机或安装外参后需同步更新这些默认值。
+    fov_image_width_px: int = 1280
+    fov_image_height_px: int = 960
+    fov_fx_px: float = 539.936
+    fov_fy_px: float = 539.936
+    # 相机相对机体的安装高度与目标控制平面高度，两者之差决定成像对地高度。
+    fov_camera_offset_z: float = 0.10
+    fov_target_plane_z: float = 1.0
+    # 偏移小于 soft_margin 不惩罚；超过 violation_cap 后惩罚封顶，
+    # 避免远距离接近段（49 m 外 max|offset| 可达 7）压过距离代价。
+    fov_soft_margin: float = 0.5
+    fov_violation_cap: float = 3.0
+    # 边界处（max|offset| = 1）单步惩罚归一化为 1，权重越大越积极回中。
+    nmpc_w_fov: float = 120.0
     # MPPI 采样式预测控制参数；采样数越大越稳但越慢，seed 保证对比可复现。
     mppi_samples: int = 48
     mppi_noise_scale: float = 2.5

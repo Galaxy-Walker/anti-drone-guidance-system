@@ -4,10 +4,21 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pythonsimulation2d.config import SimulationConfig
+from pythonsimulation2d.config import GuidanceConfig, SimulationConfig
 from pythonsimulation2d.dynamics import step_pursuer
 from pythonsimulation2d.math_utils import EPS, clamp_norm_xy, norm_xy, normalize_xy
 from pythonsimulation2d.state import PursuerState, TargetState
+
+
+# 标称 x500_mono_cam_down 下视安装 R_{B←C}（相机 link 绕机体 y 轴 90°，见 docs/vision_design.md 1.1）：
+# 图像 u 轴（宽轴）沿机体 -y，v 轴（高轴）沿机体 -x，光轴沿机体 -z 向下。
+_NOMINAL_BODY_FROM_OPTICAL = np.array([
+    [0.0, -1.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0],
+])
+# 相机与目标平面距离小于该值时不计算画面偏移，避免投影退化。
+_FOV_MIN_DEPTH_M = 0.5
 
 
 @dataclass(slots=True)
@@ -256,6 +267,76 @@ def _predict_target_constant_acceleration(target: TargetState, t_pred: float) ->
     return predicted_position, predicted_velocity
 
 
+def _fov_normalized_offset(
+    position_enu: np.ndarray,
+    yaw_enu: float,
+    target_position_enu: np.ndarray,
+    guidance: GuidanceConfig,
+) -> np.ndarray | None:
+    """固定下视相机：目标相对画面的归一化偏移 `[u, v]`，±1 为图像边缘。
+
+    目标按 `fov_target_plane_z` 控制平面解释（与 vision_adapter 的反投影假设一致），
+    机体水平偏移先按 yaw 旋转到机体 FLU，再经标称安装转到光学系做针孔投影。
+    输入非法、相机在平面下方或对地高度过小时返回 `None`。
+    """
+    position = np.asarray(position_enu, dtype=float)
+    target = np.asarray(target_position_enu, dtype=float)
+    if position.shape != (3,) or target.shape != (3,):
+        return None
+    if not np.all(np.isfinite(position)) or not np.all(np.isfinite(target)) or not np.isfinite(yaw_enu):
+        return None
+    if guidance.fov_fx_px <= 0.0 or guidance.fov_fy_px <= 0.0:
+        return None
+    if guidance.fov_image_width_px <= 0 or guidance.fov_image_height_px <= 0:
+        return None
+
+    depth = position[2] + guidance.fov_camera_offset_z - guidance.fov_target_plane_z
+    if depth <= _FOV_MIN_DEPTH_M:
+        return None
+
+    delta_x = float(target[0] - position[0])
+    delta_y = float(target[1] - position[1])
+    cos_yaw = float(np.cos(yaw_enu))
+    sin_yaw = float(np.sin(yaw_enu))
+    # 安装平移 (0, 0, 0.1) 已在 depth 里计入，水平偏移不需要再平移。
+    offset_body = np.array([
+        cos_yaw * delta_x + sin_yaw * delta_y,
+        -sin_yaw * delta_x + cos_yaw * delta_y,
+        -depth,
+    ])
+    offset_camera = _NOMINAL_BODY_FROM_OPTICAL.T @ offset_body
+    depth_camera = float(offset_camera[2])
+    if depth_camera <= _FOV_MIN_DEPTH_M:
+        return None
+    return np.array([
+        guidance.fov_fx_px * offset_camera[0] / depth_camera / (0.5 * guidance.fov_image_width_px),
+        guidance.fov_fy_px * offset_camera[1] / depth_camera / (0.5 * guidance.fov_image_height_px),
+    ])
+
+
+def _fov_penalty(
+    position_enu: np.ndarray,
+    yaw_enu: float,
+    target_position_enu: np.ndarray,
+    guidance: GuidanceConfig,
+) -> float:
+    """EMPC 的 FOV 惩罚：画面偏移超过软边界后平方增长，边界外封顶后不再增大。
+
+    归一化偏移取 `max(|u|, |v|)`（矩形画幅）；软边界到画面边缘归一化为 1，
+    使 `nmpc_w_fov` 直接对应"目标压边"时的单步代价量级。
+    """
+    offset = _fov_normalized_offset(position_enu, yaw_enu, target_position_enu, guidance)
+    if offset is None:
+        return 0.0
+
+    max_offset = float(np.max(np.abs(offset)))
+    soft_margin = guidance.fov_soft_margin
+    if max_offset <= soft_margin:
+        return 0.0
+    violation = max(0.0, min(max_offset, guidance.fov_violation_cap) - soft_margin)
+    return (violation / max(1.0 - soft_margin, EPS)) ** 2
+
+
 def _rollout_cost(
     pursuer: PursuerState,
     target: TargetState,
@@ -273,6 +354,7 @@ def _rollout_cost(
     pn_cost = 0.0
     velocity_cost = 0.0
     steady_cost = 0.0
+    fov_cost = 0.0
 
     for step in range(1, guidance.horizon_steps + 1):
         t_pred = step * guidance.mpc_dt
@@ -286,6 +368,8 @@ def _rollout_cost(
         smooth_cost += norm_xy(acceleration - previous_acceleration) ** 2
         pn_cost += norm_xy(acceleration - pn_trend) ** 2
         velocity_cost += norm_xy(relative_velocity) ** 2 * guidance.mpc_dt
+        if guidance.nmpc_w_fov > 0.0:
+            fov_cost += _fov_penalty(state.position, state.yaw, predicted_position, guidance)
         if step > guidance.horizon_steps // 2:
             steady_cost += distance**2 + 0.35 * norm_xy(relative_velocity) ** 2
         previous_acceleration = acceleration
@@ -305,4 +389,5 @@ def _rollout_cost(
         + guidance.nmpc_w_control * control_cost
         + guidance.nmpc_w_smooth * smooth_cost
         + guidance.nmpc_w_pn * pn_cost
+        + guidance.nmpc_w_fov * fov_cost
     )
