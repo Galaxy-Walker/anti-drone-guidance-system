@@ -66,9 +66,14 @@ def plot_scenario(
     output_dir: Path,
     config: SimulationConfig,
     show: bool = False,
+    *,
+    include_trajectory: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    _plot_trajectory_xy(scenario, results, output_dir, config)
+    # Gazebo 后处理的轨迹图改用 publication_plots 的论文版式，这里关掉默认样式的轨迹图，
+    # 避免同一份记录出现两张口径不同的 trajectory_xy.png。
+    if include_trajectory:
+        _plot_trajectory_xy(scenario, results, output_dir, config)
     _plot_distance_error(scenario, results, output_dir, config)
     _plot_acceleration(scenario, results, output_dir)
     _plot_yaw_rate(scenario, results, output_dir, config)

@@ -5,7 +5,7 @@
 ## 目录
 
 - `main.py`：纯 Python 离线仿真入口，运行后生成指标 CSV 和图片。
-- `plot_gazebo_csv.py`：Gazebo 记录 CSV 后处理，生成与离线仿真同类的指标和图片。
+- `plot_gazebo_csv.py`：Gazebo 记录 CSV 后处理，生成与离线仿真同类的指标和图片；轨迹图用论文版式网格图。
 - `plot_vision_csv.py`：视觉链路 CSV 后处理，生成检测率、量测误差和时序图。
 - `src/pythonsimulation2d/`：2D 目标、动力学、导引、估计器和绘图代码。
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
@@ -490,13 +490,25 @@ uv run plot_gazebo_csv.py \
 
 ```text
 metrics.csv
-trajectory_xy.png
+trajectories_2x2.png             # 论文版式轨迹网格图（单算法记录时为单面板）
 distance_error.png
 acceleration.png
 yaw_rate.png
 metrics.png
 vision_estimate.png              # 单算法记录且含视觉估计列时
 vision_estimate_<algorithm>.png  # 多算法场景目录且含视觉估计列时
+```
+
+轨迹图由 `src/pythonsimulation2d/publication_plots.py` 绘制：衬线字体、等比例面板、四个算法共用一组
+坐标范围，尺寸按英寸排版（不受 `tight_layout` 拉伸）。其余面板沿用离线仿真的默认样式，两套样式互不影响。
+默认画完整记录，需要截断时用 `--trajectory-window-s`：
+
+```bash
+# 只画前 20 s：圆周轨迹留有缺口、不闭合成整圆，docs/assets 里的插图就是这一口径
+uv run plot_gazebo_csv.py \
+  outputs/gazebo2d_vision_runs/circle \
+  --output-dir outputs/circle_vision \
+  --trajectory-window-s 20
 ```
 
 视觉链路 CSV（检测率、像素残差、延迟、丢失时段、拒绝原因）由 `plot_vision_csv.py` 处理：

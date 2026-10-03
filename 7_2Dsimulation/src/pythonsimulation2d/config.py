@@ -17,6 +17,15 @@ ALGORITHM_LABELS = {
     "pn_nmpc": "2D PN + NMPC",
 }
 
+# 论文插图的面板标题：比 ALGORITHM_LABELS 更短，和正文表格里的叫法一致。
+# 其中 pn_nmpc 在文档中统称 EMPC（Enumerative MPC），代码标识保持不变，见 AGENTS.md。
+ALGORITHM_PANEL_LABELS = {
+    "basic": "Direct Pursuit",
+    "pn": "PN-only",
+    "pn_mppi": "PN-guided MPPI",
+    "pn_nmpc": "PN-guided E-MPC",
+}
+
 
 @dataclass(slots=True)
 class PursuerConfig:

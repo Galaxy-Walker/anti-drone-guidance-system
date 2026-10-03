@@ -594,16 +594,18 @@ uv run plot_gazebo_csv.py \
   outputs/gazebo2d/circle \
   --output-dir outputs/gazebo2d/circle/total
 
-# 视觉闭环使用独立记录目录时，绘图也单独输出，避免覆盖基线
+# 视觉闭环使用独立记录目录时，绘图也单独输出，避免覆盖基线；
+# --trajectory-window-s 20 只画前 20 s，圆周轨迹留有缺口（12.3 节插图的口径）
 uv run plot_gazebo_csv.py \
   outputs/gazebo2d_vision_runs/circle \
-  --output-dir outputs/circle_vision
+  --output-dir outputs/circle_vision \
+  --trajectory-window-s 20
 
 # 视觉链路本身（检出率、像素/位置残差、时延、丢失时段、拒绝原因）
 uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
 ```
 
-`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。两个口径需要注意：
+`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。轨迹图例外：它由 `pythonsimulation2d/publication_plots.py` 按论文版式画成网格图（`trajectories_2x2.png`，衬线字体、等比例面板、四算法共用坐标范围，默认画完整记录、`--trajectory-window-s` 可截断），其余面板仍与离线仿真同款。两个口径需要注意：
 
 - **dt**：`plot_gazebo_csv.py` 用**第一个**跑批推断出的单一采样间隔渲染全部算法（`--dt` 可显式覆盖），而记录时间戳存在 ±4 ms 抖动；逐跑批统计控制能量或 yaw rate 时应按跑批各自的中位间隔（或逐样本 Δt 积分）计算，否则 MPPI/EMPC 这类数值会差约 8%。
 - **捕获时间**：`target_source=vision` 的初始捕获流程会让两机在 t=0 时已落在 1.5 m 捕获半径内，捕获时间恒为 0，评估视觉闭环时应改用最大/平均水平距离。
@@ -648,6 +650,8 @@ uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_re
 与第 10 节离线圆周场景相比结论方向一致（EMPC 精度占优、MPPI 更省控制），但绝对数值不可直接比较：离线从 47 m 外接近目标、统计窗口包含接近段，而视觉闭环在 t=0 时两机已经贴在一起；闭环还要额外承受 PX4 底层控制滞后、setpoint 跟踪误差与量测丢失。
 
 ### 12.3 视觉闭环插图
+
+四宫格轨迹图由 `plot_gazebo_csv.py` 直接产出（前 20 s，见 11.4 节命令），复制为 `assets/` 下的插图：
 
 ![Gazebo vision circle trajectories 2x2](assets/gazebo_vision_circle_trajectories_2x2.png)
 

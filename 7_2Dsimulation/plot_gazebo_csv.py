@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, help="Directory for metrics.csv and PNG figures; defaults to input directory")
     parser.add_argument("--dt", type=float, help="Sample interval for yaw-rate and energy metrics; defaults to median CSV dt")
     parser.add_argument("--sim-time", type=float, help="Metric horizon for uncaptured runs; defaults to last CSV time")
+    parser.add_argument(
+        "--trajectory-window-s",
+        type=float,
+        help="Only draw the first N seconds of the trajectories (20 keeps the circular target from closing into full loops); defaults to the whole record",
+    )
     parser.add_argument("--show", action="store_true", help="Display matplotlib windows after saving figures")
     return parser.parse_args()
 
@@ -80,6 +85,7 @@ def main() -> None:
         matplotlib.use("Agg")
 
     from pythonsimulation2d.plotting import plot_scenario
+    from pythonsimulation2d.publication_plots import plot_trajectory_panels
 
     input_path = args.input_path.expanduser().resolve()
     csv_paths = _resolve_csv_paths(input_path, args.algorithm)
@@ -101,9 +107,12 @@ def main() -> None:
 
     metrics_table = compute_scenario_metrics(results, config)
     write_metrics_csv(metrics_table, output_dir)
-    plot_scenario(scenario, results, metrics_table, output_dir, config, show=args.show)
+    # 轨迹图换成论文版式的网格图，其余四个面板仍复用离线仿真的绘图口径。
+    plot_scenario(scenario, results, metrics_table, output_dir, config, show=args.show, include_trajectory=False)
+    trajectory_path = plot_trajectory_panels(results, output_dir, window_s=args.trajectory_window_s)
     vision_plots = _plot_vision_panels(scenario, results, csv_by_algorithm, output_dir)
     print(f"Saved Gazebo 2D plots and metrics to {output_dir}")
+    print(f"  trajectory: {trajectory_path.name}")
     if vision_plots:
         print(f"Saved {vision_plots} vision estimate figure(s) to {output_dir}")
 
