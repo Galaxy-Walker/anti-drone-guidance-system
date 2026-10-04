@@ -33,8 +33,9 @@ for candidate in (ROOT / "src", ROOT / "src" / "gazebosimulation2d"):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from pythonsimulation2d.config import GuidanceConfig
 from pythonsimulation2d.state import PursuerState, TargetState
-from pythonsimulation2d.target_filter import STATE_LOST, STATE_TRACKING
+from pythonsimulation2d.target_filter import STATE_COAST, STATE_LOST, STATE_TRACKING
 
 from gazebosimulation2d.guidance_node import GuidanceNode, _VisionSnapshot
 from gazebosimulation2d.px4_utils import timestamp_us
@@ -145,6 +146,33 @@ class TestParameters:
     def test_non_positive_target_speed_scale_is_rejected(self) -> None:
         with pytest.raises(ValueError):
             make_node(target_speed_scale=0.0)
+
+    def test_pid_parameters_default_to_offline_config(self) -> None:
+        node = make_node()
+        try:
+            defaults = GuidanceConfig()
+            assert node._config.guidance.pid_kp == pytest.approx(defaults.pid_kp)
+            assert node._config.guidance.pid_ki == pytest.approx(defaults.pid_ki)
+            assert node._config.guidance.pid_kd == pytest.approx(defaults.pid_kd)
+            assert node._config.guidance.pid_integral_limit == pytest.approx(defaults.pid_integral_limit)
+        finally:
+            node.destroy_node()
+
+    def test_pid_parameters_override_guidance_defaults(self) -> None:
+        node = make_node(algorithm="pid", pid_kp=3.0, pid_ki=0.2, pid_kd=4.0, pid_integral_limit=1.5)
+        try:
+            assert node._config.guidance.pid_kp == pytest.approx(3.0)
+            assert node._config.guidance.pid_ki == pytest.approx(0.2)
+            assert node._config.guidance.pid_kd == pytest.approx(4.0)
+            assert node._config.guidance.pid_integral_limit == pytest.approx(1.5)
+        finally:
+            node.destroy_node()
+
+    @pytest.mark.parametrize("name", ["pid_kp", "pid_ki", "pid_kd", "pid_integral_limit"])
+    @pytest.mark.parametrize("value", [-0.5, math.nan, math.inf])
+    def test_invalid_pid_parameter_is_rejected(self, name, value) -> None:
+        with pytest.raises(ValueError):
+            make_node(**{name: value})
 
 
 class TestVisionTargetState:
@@ -337,8 +365,9 @@ class TestInitialAcquisition:
 
 
 class TestGuidanceWiring:
-    def test_vision_source_drives_setpoint_from_estimate(self, monkeypatch) -> None:
-        node = make_node(target_source="vision")
+    @pytest.mark.parametrize("algorithm", ["pn", "pid"])
+    def test_vision_source_drives_setpoint_from_estimate(self, monkeypatch, algorithm) -> None:
+        node = make_node(target_source="vision", algorithm=algorithm)
         clock = {"s": 0.0}
         monkeypatch.setattr(node, "_clock_now_s", lambda: clock["s"])
         try:
@@ -364,8 +393,9 @@ class TestGuidanceWiring:
         finally:
             node.destroy_node()
 
-    def test_odometry_regression_keeps_old_behavior(self) -> None:
-        node = make_node()
+    @pytest.mark.parametrize("algorithm", ["pn", "pid"])
+    def test_odometry_regression_keeps_old_behavior(self, algorithm) -> None:
+        node = make_node(algorithm=algorithm)
         try:
             set_vehicle_states(node)
             node._run_tracking_cycle(timestamp=0)
@@ -400,9 +430,87 @@ class TestGuidanceWiring:
             node.destroy_node()
 
 
+class TestPidLifecycle:
+    def test_coast_integrates_hold_clears_and_detection_resumes(self, monkeypatch) -> None:
+        node = make_node(algorithm="pid", target_source="vision")
+        clock = {"s": 1.0}
+        monkeypatch.setattr(node, "_clock_now_s", lambda: clock["s"])
+        try:
+            # 真值与视觉方向相反，确保漏检时不会切回目标 odometry。
+            set_vehicle_states(node, target_position=(-10.0, 0.0, 1.0))
+            node._vision_pose_callback(make_vision_message(1.0, 1.0, 0.0))
+            node._run_tracking_cycle(timestamp=123)
+            np.testing.assert_allclose(node._memory.pid_integral, [0.05, 0.0, 0.0])
+            setpoint = node._pursuer_setpoint_pub.messages[-1]
+            np.testing.assert_allclose(setpoint.acceleration, [0.0, 2.505, 0.0], atol=1e-6)
+            np.testing.assert_allclose(setpoint.velocity, [0.0, 2.505 * 0.05, 0.0], atol=1e-6)
+            assert node._pursuer_offboard_pub.messages[-1].velocity
+            assert node._pursuer_offboard_pub.messages[-1].acceleration
+
+            clock["s"] = 1.4
+            node._run_tracking_cycle(timestamp=124)
+            assert node._vision_tracker.predict(clock["s"]).state == STATE_COAST
+            np.testing.assert_allclose(node._memory.pid_integral, [0.1, 0.0, 0.0])
+            assert node._pursuer_setpoint_pub.messages[-1].acceleration[1] > 0.0
+            assert node._vision_measurements == 1
+
+            clock["s"] = 2.2
+            node._run_tracking_cycle(timestamp=125)
+            np.testing.assert_array_equal(node._memory.pid_integral, np.zeros(3))
+            np.testing.assert_array_equal(node._pursuer_setpoint_pub.messages[-1].velocity, np.zeros(3))
+            np.testing.assert_array_equal(node._pursuer_setpoint_pub.messages[-1].acceleration, np.zeros(3))
+            # 悬停多个周期也不累积积分。
+            clock["s"] = 2.25
+            node._run_tracking_cycle(timestamp=126)
+            np.testing.assert_array_equal(node._memory.pid_integral, np.zeros(3))
+
+            clock["s"] = 2.3
+            node._vision_pose_callback(make_vision_message(2.3, -1.0, 0.0))
+            node._run_tracking_cycle(timestamp=127)
+            sample = node._record_samples[-1]
+            assert sample.vision_valid == 1.0
+            assert node._vision_measurements == 2
+            assert node._memory.pid_integral[0] == pytest.approx(sample.target_est_x * node._config.dt)
+            assert node._memory.pid_integral[0] < 0.0
+            assert node._pursuer_setpoint_pub.messages[-1].acceleration[1] < 0.0
+        finally:
+            node.destroy_node()
+
+    def test_derivative_uses_filtered_target_velocity(self, monkeypatch) -> None:
+        node = make_node(algorithm="pid", target_source="vision", pid_kp=0.0, pid_ki=0.0)
+        clock = {"s": 1.0}
+        monkeypatch.setattr(node, "_clock_now_s", lambda: clock["s"])
+        try:
+            set_vehicle_states(node)
+            node._target.velocity[0] = -5.0
+            for step in range(10):
+                clock["s"] = 1.0 + step * 0.1
+                node._vision_pose_callback(make_vision_message(clock["s"], step * 0.2, 0.0))
+                node._run_tracking_cycle(timestamp=step)
+            sample = node._record_samples[-1]
+            assert sample.target_est_vx == pytest.approx(2.0, abs=0.3)
+            assert node._pursuer_setpoint_pub.messages[-1].acceleration[1] == pytest.approx(
+                2.6 * sample.target_est_vx, abs=1e-6
+            )
+        finally:
+            node.destroy_node()
+
+    def test_start_tracking_clears_integral(self) -> None:
+        node = make_node(algorithm="pid")
+        try:
+            node._memory.pid_integral[:] = [1.0, -2.0, 0.0]
+            node._start_tracking()
+            np.testing.assert_array_equal(node._memory.pid_integral, np.zeros(3))
+        finally:
+            node.destroy_node()
+
+
 class TestRecording:
-    def test_csv_contains_vision_columns(self, tmp_path) -> None:
-        node = make_node(target_source="vision", record_data=True, record_output_dir=str(tmp_path))
+    @pytest.mark.parametrize("algorithm", ["pn", "pid"])
+    def test_csv_contains_vision_columns(self, tmp_path, algorithm) -> None:
+        node = make_node(
+            algorithm=algorithm, target_source="vision", record_data=True, record_output_dir=str(tmp_path)
+        )
         clock = {"s": 0.0}
         node._clock_now_s = lambda: clock["s"]
         try:
@@ -414,7 +522,7 @@ class TestRecording:
         finally:
             node.destroy_node()
 
-        path = tmp_path / "circle" / "pn" / "gazebo_samples.csv"
+        path = tmp_path / "circle" / algorithm / "gazebo_samples.csv"
         with path.open(newline="", encoding="utf-8") as file:
             reader = csv.DictReader(file)
             fieldnames = reader.fieldnames

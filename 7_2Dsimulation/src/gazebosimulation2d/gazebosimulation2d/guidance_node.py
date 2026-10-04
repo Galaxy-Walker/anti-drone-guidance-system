@@ -2,7 +2,7 @@
 
 节点沿用 6_Simulation 的双 PX4 实例接口：
 
-- pursuer：追踪机，使用 `pythonsimulation2d` 的导引算法，并发布 XY 位置 setpoint + 固定高度。
+- pursuer：追踪机，使用 `pythonsimulation2d` 的导引算法，追踪阶段发布水平速度 + 加速度 setpoint。
 - target：目标机，沿用 6 的目标机/话题/模型，按合成目标参考轨迹飞行。
 
 导引、距离和记录指标都按 XY 平面计算；高度只用于 Gazebo/PX4 setpoint。
@@ -53,7 +53,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from pythonsimulation2d.config import ALGORITHMS, SCENARIOS, SimulationConfig
+from pythonsimulation2d.config import ALGORITHMS, SCENARIOS, GuidanceConfig, SimulationConfig
 from pythonsimulation2d.guidance import GuidanceMemory, compute_guidance
 from pythonsimulation2d.math_utils import clamp_norm_xy, norm_xy
 from pythonsimulation2d.state import PursuerState, SimulationResult, TargetState
@@ -84,6 +84,9 @@ from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_t
 
 # 视觉量测的 z 固定为目标平面高度；只估计 XY。
 VISION_UNKNOWN = math.nan
+
+# PID 参数默认值与离线 config.py 共用同一份 GuidanceConfig，避免 launch/YAML 与代码漂移。
+_PID_DEFAULTS = GuidanceConfig()
 
 
 @dataclass(slots=True)
@@ -264,6 +267,11 @@ class GuidanceNode(Node):
         self.declare_parameter("pursuer_fixed_altitude", 8.0)
         self.declare_parameter("target_base_altitude", 1.0)
         self.declare_parameter("target_speed_scale", 1.0)
+        # PID 导引参数：默认取离线 GuidanceConfig，可通过 launch 覆盖用于闭环调参。
+        self.declare_parameter("pid_kp", _PID_DEFAULTS.pid_kp)
+        self.declare_parameter("pid_ki", _PID_DEFAULTS.pid_ki)
+        self.declare_parameter("pid_kd", _PID_DEFAULTS.pid_kd)
+        self.declare_parameter("pid_integral_limit", _PID_DEFAULTS.pid_integral_limit)
         self.declare_parameter("target_start_position_tolerance", 0.75)
         self.declare_parameter("target_start_velocity_tolerance", 0.75)
         self.declare_parameter("pursuer_takeoff_position_tolerance", 0.75)
@@ -317,6 +325,21 @@ class GuidanceNode(Node):
         self._config.target.linear_velocity = (
             self._config.target.linear_velocity * self._target_speed_scale
         )
+
+        # PID 参数即使当前算法不是 pid 也校验，保证配置错误在启动时暴露。
+        pid_values = {
+            "pid_kp": self._finite_float("pid_kp"),
+            "pid_ki": self._finite_float("pid_ki"),
+            "pid_kd": self._finite_float("pid_kd"),
+            "pid_integral_limit": self._finite_float("pid_integral_limit"),
+        }
+        for name, value in pid_values.items():
+            if value < 0.0:
+                raise ValueError(f"{name} 不能为负")
+        self._config.guidance.pid_kp = pid_values["pid_kp"]
+        self._config.guidance.pid_ki = pid_values["pid_ki"]
+        self._config.guidance.pid_kd = pid_values["pid_kd"]
+        self._config.guidance.pid_integral_limit = pid_values["pid_integral_limit"]
 
         self._target_base_altitude = float(self.get_parameter("target_base_altitude").value)
         self._load_vision_parameters()
@@ -574,6 +597,9 @@ class GuidanceNode(Node):
 
     def _run_hold_cycle(self, timestamp: int, elapsed: float, snapshot: _VisionSnapshot) -> None:
         """丢失/未初始化时的悬停：零速零加速度 setpoint，保持当前 yaw。"""
+        if self._algorithm == "pid":
+            # 丢失期间不保留旧误差积分，避免重新检测后旧积分推动追踪机偏离目标。
+            self._memory.pid_integral.fill(0.0)
         self._record_sample(elapsed, np.zeros(3), snapshot)
         self._publish_target_setpoint(timestamp, self._gazebo_target_reference(elapsed))
 
@@ -661,6 +687,7 @@ class GuidanceNode(Node):
         self._last_startup_log_ns = None
         self._last_hold_log_ns = None
         self._memory.previous_acceleration = np.zeros(3)
+        self._memory.pid_integral.fill(0.0)
         if self._vision_tracker is not None:
             # 追踪开始前的量测不参与闭环，重置估计器和消费指针，等第一个新量测。
             self._vision_tracker.reset()

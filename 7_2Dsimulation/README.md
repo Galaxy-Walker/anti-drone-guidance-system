@@ -98,6 +98,9 @@ ros2 launch gazebosimulation2d guidance.launch.py
 
 ```bash
 ros2 launch gazebosimulation2d guidance.launch.py algorithm:=pn_mppi scenario:=circle
+
+# PID：默认使用目标 odometry，复用离线 PID 算法与现有速度 + 加速度 setpoint 链路
+ros2 launch gazebosimulation2d guidance.launch.py algorithm:=pid scenario:=circle
 ```
 
 常用参数示例：
@@ -156,6 +159,16 @@ param save                # 可选，参数变更后 PX4 会自动保存
 - 导引、记录距离和指标均按 XY 平面计算；追踪阶段 z 速度和 z 加速度指令为 0。
 - `pursuer_fixed_altitude` 默认 8m，用于 2D 仿真配置和结果标注；当前追踪阶段不再通过 position setpoint 强制拉高度。
 - `target_speed_scale`（默认 1.0）只缩放目标机参考轨迹的速度：`circle` 缩放角速度（半径不变）、`linear` 缩放速度矢量、`stationary` 不受影响；用于不同目标速度的对比实验，起止点与控制算法参数不变。
+- PID 参数（`algorithm:=pid` 时生效）通过 launch 覆盖：`pid_kp`（默认 2.5）、`pid_ki`（0.1）、`pid_kd`（2.6）、`pid_integral_limit`（3.0 m·s，积分向量范数上限）；不传时与 `src/pythonsimulation2d/config.py` 的离线默认值一致，参数为负会在启动时报错。
+
+PID 在 odometry 与视觉模式下均调用 `compute_guidance("pid", ...)`，不另设一套 ROS 控制算法；仅控制 XY，D 项使用目标与追踪机的相对速度。参数必须为有限非负数，launch 将其显式解析为浮点数（例如 `pid_ki:=0` 可关闭 I 项）。
+
+| PID launch 参数 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `pid_kp` | 2.5 | XY 位置误差比例增益 |
+| `pid_ki` | 0.1 | XY 位置误差积分增益 |
+| `pid_kd` | 2.6 | 相对速度误差增益 |
+| `pid_integral_limit` | 3.0 | XY 积分向量范数上限，单位 m·s |
 
 开启 0.2s 周期 ROS 调试日志：
 
@@ -185,6 +198,8 @@ ros2 launch gazebosimulation2d guidance.launch.py debug_log:=true debug_log_peri
 | `yolo` | `vision_detector` 订阅图像，conda 常驻 worker 推理，输出 `/camera/detections` | `target_source:=vision` 时是 |
 
 默认 `enable_camera:=false`、`vision_source:=off`、`target_source:=odometry`，启动方式与接入视觉前一致。导引节点在 `target_source:=vision` 时只消费 `/vision/target_pose`：漏检 → coast（α-β 预测），超时 → hold（悬停），不允许静默回退 odometry。
+
+`algorithm:=pid` 复用上述视觉链路：P/I 项使用滤波并外推到当前时刻的 XY 位置，D 项使用滤波目标速度减去追踪机 odometry 速度。短时漏检预测期间继续积分并按范数限幅；进入 hold 时清零积分，悬停期间不累积；重新收到有效量测后自动恢复跟踪，从零重新积分。追踪阶段开始时也会清零积分。
 
 依赖（由使用者准备）：
 
@@ -255,6 +270,8 @@ ros2 launch gazebosimulation2d guidance.launch.py \
   yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
   record_output_dir:=outputs/gazebo2d_vision_runs
 ```
+
+PID YOLO 闭环使用上面的同一条命令，把 `algorithm:=pn` 替换为 `algorithm:=pid` 即可；PID 参数不传时保持现有默认值。`truth` 几何旁路同样支持 `algorithm:=pid target_source:=vision`。
 
 `use_sim_time:=true` 是视觉闭环的硬性要求：图像 stamp、位姿缓存和量测时间都以 `/clock`（Gazebo 仿真时间）为基准；检测/适配/导引三个节点都挂了墙钟防呆，2 s 内收不到 `/clock` 会打印 FATAL 并退出，而不是静默不动作。先启动 Gazebo 再启动 launch。
 
@@ -474,7 +491,7 @@ stationary, linear, circle
 
 `pn_nmpc` 是候选枚举式预测控制（文档称 EMPC），代价函数除距离、控制、平滑和 PN 趋势项外还包含画面保持（FOV）惩罚：把预测目标投影到标称下视相机的图像平面，归一化偏移超过软边界后加重回中、接近边缘时惩罚最强。权重与相机参数在 `src/pythonsimulation2d/config.py` 的 `nmpc_w_fov`、`fov_*` 字段中，原理与 Gazebo 验证见 [算法说明](docs/2d_simulation_guidance_overview.md) 7.4.1 和 12.5 节。
 
-`pid` 是单环位置 PID 对照：对 XY 位置误差做比例-积分-微分（D 项取相对速度误差），直接输出加速度，积分按范数限幅抗饱和；参数 `pid_kp`、`pid_ki`、`pid_kd`、`pid_integral_limit` 在三种离线场景上网格整定，原理、整定方法与离线对比结果见 [算法说明](docs/2d_simulation_guidance_overview.md) 6.5 和 10 节。本轮只做离线对比，Gazebo/视觉闭环未复测。
+`pid` 是单环位置 PID 对照：对 XY 位置误差做比例-积分-微分（D 项取相对速度误差），直接输出加速度，积分按范数限幅抗饱和；参数 `pid_kp`、`pid_ki`、`pid_kd`、`pid_integral_limit` 在三种离线场景上网格整定，原理、整定方法与离线对比结果见 [算法说明](docs/2d_simulation_guidance_overview.md) 6.5 和 10 节。Gazebo odometry 与 YOLO 视觉控制已接入，本次验收为单元测试及包构建，不包含实际 Gazebo/YOLO 闭环飞行复测或重新调参。
 
 ## 记录后处理与绘图
 
