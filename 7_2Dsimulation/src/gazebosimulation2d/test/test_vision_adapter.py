@@ -169,6 +169,29 @@ class TestCameraInfo:
 
 
 class TestMeasurement:
+    def test_different_vehicle_origins_share_world_coordinates(self) -> None:
+        adapter = VisionAdapter([
+            Parameter("vision_source", value="truth"),
+            Parameter("pursuer_origin_xy", value=[-2.0, 0.0]),
+            Parameter("target_origin_xy", value=[1.0, 0.0]),
+        ])
+        try:
+            adapter._camera_info_callback(make_camera_info())
+            set_pursuer(adapter, position_ned=(0.0, 2.0, -8.0))
+            set_target(adapter, position_ned=(4.0, 2.0, -1.0))
+            adapter._on_timer()
+            record = adapter._records[-1]
+            assert record.valid
+            assert record.target_x_est == pytest.approx(3.0, abs=1e-6)
+            assert record.target_y_est == pytest.approx(4.0, abs=1e-6)
+            assert record.target_x_ref == pytest.approx(3.0, abs=1e-6)
+            assert record.target_y_ref == pytest.approx(4.0, abs=1e-6)
+            assert record.position_roundtrip_error_m == pytest.approx(0.0, abs=1e-6)
+            pose = adapter._compose_pose(np.array([0.0, 2.0, -8.0]), np.array([1.0, 0.0, 0.0, 0.0]))
+            np.testing.assert_allclose(pose.position_enu, [0.0, 0.0, 8.1])
+        finally:
+            adapter.destroy_node()
+
     def test_valid_measurement_roundtrip(self, node: VisionAdapter) -> None:
         prime_valid_inputs(node)
         node._on_timer()

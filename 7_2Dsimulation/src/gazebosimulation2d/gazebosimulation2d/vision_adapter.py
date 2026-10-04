@@ -67,7 +67,7 @@ from pythonsimulation2d.camera_geometry import (
     validate_intrinsics,
 )
 
-from gazebosimulation2d.coordinates import camera_pose_from_odometry
+from gazebosimulation2d.coordinates import camera_pose_from_odometry, local_ned_to_world_enu, origin_enu_from_xy
 from gazebosimulation2d.recording_paths import resolve_recording_path
 from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_timer
 
@@ -285,6 +285,8 @@ class VisionAdapter(Node):
         self.declare_parameter("vision_source", "off")
         self.declare_parameter("pursuer_namespace", "/px4_1")
         self.declare_parameter("target_namespace", "/px4_2")
+        self.declare_parameter("pursuer_origin_xy", [0.0, 0.0])
+        self.declare_parameter("target_origin_xy", [0.0, 0.0])
         self.declare_parameter("camera_frame_id", "camera_link_optical")
         self.declare_parameter("target_base_altitude", 1.0)
         self.declare_parameter("camera_mount_xyz", [0.0, 0.0, 0.10])
@@ -323,6 +325,8 @@ class VisionAdapter(Node):
 
         self._pursuer_namespace = "/" + str(self.get_parameter("pursuer_namespace").value).strip("/")
         self._target_namespace = "/" + str(self.get_parameter("target_namespace").value).strip("/")
+        self._pursuer_origin_enu = origin_enu_from_xy(self.get_parameter("pursuer_origin_xy").value)
+        self._target_origin_enu = origin_enu_from_xy(self.get_parameter("target_origin_xy").value)
         self._camera_frame_id = str(self.get_parameter("camera_frame_id").value)
         if not self._camera_frame_id:
             raise ValueError("camera_frame_id must not be empty")
@@ -485,6 +489,7 @@ class VisionAdapter(Node):
             self._pursuer_odometry.q,
             self._camera_mount_xyz,
             self._camera_mount_rpy_rad,
+            self._pursuer_origin_enu,
         )
         if pose_result is None:
             record.invalid_reason = "invalid_pursuer_odometry"
@@ -543,7 +548,7 @@ class VisionAdapter(Node):
         if position_ned.shape != (3,) or not np.all(np.isfinite(position_ned)):
             return None
 
-        position_enu = np.array([position_ned[1], position_ned[0], -position_ned[2]], dtype=float)
+        position_enu = local_ned_to_world_enu(position_ned, self._target_origin_enu)
         record.target_x_ref = float(position_enu[0])
         record.target_y_ref = float(position_enu[1])
         record.target_z_odom = float(position_enu[2])
@@ -684,6 +689,7 @@ class VisionAdapter(Node):
             quaternion_wxyz,
             self._camera_mount_xyz,
             self._camera_mount_rpy_rad,
+            self._pursuer_origin_enu,
         )
         if pose_result is None:
             return None

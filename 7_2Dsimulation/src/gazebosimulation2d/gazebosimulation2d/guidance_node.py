@@ -57,7 +57,7 @@ from pythonsimulation2d.config import ALGORITHMS, SCENARIOS, SimulationConfig
 from pythonsimulation2d.guidance import GuidanceMemory, compute_guidance
 from pythonsimulation2d.math_utils import clamp_norm_xy, norm_xy
 from pythonsimulation2d.state import PursuerState, SimulationResult, TargetState
-from pythonsimulation2d.target import target_state
+from pythonsimulation2d.target import TableOcclusionMission, target_state, target_under_table
 from pythonsimulation2d.target_filter import (
     STATE_LOST,
     TargetFilterConfig,
@@ -68,6 +68,9 @@ from gazebosimulation2d.recording_paths import resolve_recording_path
 from gazebosimulation2d.coordinates import (
     enu_to_ned_list,
     ned_to_enu_vector,
+    local_ned_to_world_enu,
+    origin_enu_from_xy,
+    world_enu_to_local_ned,
     yaw_enu_to_ned,
     yaw_from_quaternion_ned,
     yaw_to_target_ned,
@@ -110,6 +113,7 @@ class _TrackingSample:
     target_est_ax: float = VISION_UNKNOWN
     target_est_ay: float = VISION_UNKNOWN
     vision_error_xy: float = VISION_UNKNOWN
+    target_under_table: bool = False
 
 
 @dataclass(slots=True)
@@ -153,6 +157,7 @@ class GuidanceNode(Node):
         self._memory = GuidanceMemory()
         self._pursuer: PursuerState | None = None
         self._target: TargetState | None = None
+        self._table_mission = TableOcclusionMission(self._config) if self._scenario == "table_occlusion" else None
         self._active_start_ns: int | None = None
         self._last_debug_log_ns: int | None = None
         self._last_startup_log_ns: int | None = None
@@ -256,6 +261,8 @@ class GuidanceNode(Node):
         self.declare_parameter("control_rate_hz", 20.0)
         self.declare_parameter("pursuer_namespace", "/px4_1")
         self.declare_parameter("target_namespace", "/px4_2")
+        self.declare_parameter("pursuer_origin_xy", [0.0, 0.0])
+        self.declare_parameter("target_origin_xy", [0.0, 0.0])
         self.declare_parameter("auto_arm", True)
         self.declare_parameter("auto_offboard", True)
         self.declare_parameter("offboard_warmup_cycles", 20)
@@ -317,8 +324,12 @@ class GuidanceNode(Node):
         self._config.target.linear_velocity = (
             self._config.target.linear_velocity * self._target_speed_scale
         )
+        self._config.target.table.speed *= self._target_speed_scale
 
         self._target_base_altitude = float(self.get_parameter("target_base_altitude").value)
+        self._config.target.fixed_altitude = self._target_base_altitude
+        self._pursuer_origin_enu = origin_enu_from_xy(self.get_parameter("pursuer_origin_xy").value)
+        self._target_origin_enu = origin_enu_from_xy(self.get_parameter("target_origin_xy").value)
         self._load_vision_parameters()
         self._pursuer_namespace = str(self.get_parameter("pursuer_namespace").value)
         self._target_namespace = str(self.get_parameter("target_namespace").value)
@@ -415,7 +426,7 @@ class GuidanceNode(Node):
         return value
 
     def _pursuer_odometry_callback(self, message: VehicleOdometry) -> None:
-        position = ned_to_enu_vector(message.position)
+        position = local_ned_to_world_enu(message.position, self._pursuer_origin_enu)
         velocity = ned_to_enu_vector(message.velocity)
         if not np.all(np.isfinite(position)) or not np.all(np.isfinite(velocity)):
             return
@@ -428,7 +439,7 @@ class GuidanceNode(Node):
         )
 
     def _target_odometry_callback(self, message: VehicleOdometry) -> None:
-        position = ned_to_enu_vector(message.position)
+        position = local_ned_to_world_enu(message.position, self._target_origin_enu)
         velocity = ned_to_enu_vector(message.velocity)
         if not np.all(np.isfinite(position)) or not np.all(np.isfinite(velocity)):
             return
@@ -496,7 +507,7 @@ class GuidanceNode(Node):
         else:
             target_state, snapshot = self._target, _VisionSnapshot()
         if target_state is None:
-            self._run_hold_cycle(timestamp, elapsed, snapshot)
+            self._run_hold_cycle(timestamp, elapsed, snapshot, target_reference=target_reference)
             return
 
         guidance = compute_guidance(
@@ -572,10 +583,15 @@ class GuidanceNode(Node):
         )
         return target_state, snapshot
 
-    def _run_hold_cycle(self, timestamp: int, elapsed: float, snapshot: _VisionSnapshot) -> None:
+    def _run_hold_cycle(
+        self, timestamp: int, elapsed: float, snapshot: _VisionSnapshot,
+        *, target_reference: TargetState | None = None,
+    ) -> None:
         """丢失/未初始化时的悬停：零速零加速度 setpoint，保持当前 yaw。"""
         self._record_sample(elapsed, np.zeros(3), snapshot)
-        self._publish_target_setpoint(timestamp, self._gazebo_target_reference(elapsed))
+        self._publish_target_setpoint(
+            timestamp, target_reference if target_reference is not None else self._gazebo_target_reference(elapsed)
+        )
 
         yaw_ned = yaw_enu_to_ned(self._pursuer.yaw)
         self._pursuer_offboard_pub.publish(offboard_control_mode(timestamp, velocity=True, acceleration=True))
@@ -608,12 +624,16 @@ class GuidanceNode(Node):
             self.get_logger().info(message)
 
     def _target_start_reference(self) -> TargetState:
-        start = self._gazebo_target_reference(0.0)
+        start = target_state(self._scenario, 0.0, self._config)
+        start.position[2] = self._target_base_altitude
         return TargetState(start.position.copy(), np.zeros(3), np.zeros(3))
 
     def _gazebo_target_reference(self, elapsed: float) -> TargetState:
         """目标 XY 使用 7 的 2D 轨迹，高度固定在离地 1m。"""
-        reference = target_state(self._scenario, elapsed, self._config)
+        if self._table_mission is not None and self._target is not None:
+            reference = self._table_mission.reference(elapsed, self._target)
+        else:
+            reference = target_state(self._scenario, elapsed, self._config)
         position = reference.position.copy()
         velocity = reference.velocity.copy()
         acceleration = reference.acceleration.copy()
@@ -692,6 +712,10 @@ class GuidanceNode(Node):
             yaw=float(self._pursuer.yaw),
             distance=float(distance_xy),
             target_source=self._target_source,
+            target_under_table=(
+                self._scenario == "table_occlusion"
+                and bool(target_under_table(self._target.position, self._config.target.table))
+            ),
         )
         if self._target_source == "vision":
             sample.vision_valid = 1.0 if snapshot.valid else 0.0
@@ -765,6 +789,7 @@ class GuidanceNode(Node):
             "acceleration_z",
             "yaw",
             "distance_xy",
+            "target_under_table",
             # 视觉闭环新增列：target_x/y 仍是 odometry 真值，估计值单独成列。
             "guidance_target_source",
             "vision_valid",
@@ -804,6 +829,7 @@ class GuidanceNode(Node):
                         "acceleration_z": float(result.acceleration[index, 2]),
                         "yaw": float(result.yaw[index]),
                         "distance_xy": float(result.distance[index]),
+                        "target_under_table": int(sample.target_under_table),
                         "guidance_target_source": sample.target_source,
                         "vision_valid": sample.vision_valid,
                         "vision_age_s": sample.vision_age_s,
@@ -837,7 +863,7 @@ class GuidanceNode(Node):
         self._target_setpoint_pub.publish(
             trajectory_setpoint(
                 timestamp,
-                position=enu_to_ned_list(target_reference.position),
+                position=world_enu_to_local_ned(target_reference.position, self._target_origin_enu),
                 velocity=enu_to_ned_list(target_reference.velocity),
                 yaw=yaw_enu_to_ned(self._target_yaw_enu),
             )
@@ -878,7 +904,7 @@ class GuidanceNode(Node):
         self._pursuer_setpoint_pub.publish(
             trajectory_setpoint(
                 timestamp,
-                position=enu_to_ned_list(self._pursuer_takeoff_position),
+                position=world_enu_to_local_ned(self._pursuer_takeoff_position, self._pursuer_origin_enu),
                 velocity=enu_to_ned_list(np.zeros(3)),
                 yaw=yaw_ned,
             )

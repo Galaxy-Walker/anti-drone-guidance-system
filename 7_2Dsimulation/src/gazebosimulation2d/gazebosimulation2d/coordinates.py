@@ -22,6 +22,24 @@ def enu_to_ned_list(vector: Sequence[float] | np.ndarray) -> list[float]:
     return enu_to_ned_vector(vector).tolist()
 
 
+def origin_enu_from_xy(raw: object) -> np.ndarray:
+    """解析出生点的世界 ENU XY；高度仍以地面为原点。"""
+    if isinstance(raw, str):
+        raw = [float(item) for item in raw.strip().strip("[]").split(",")]
+    values = np.asarray(raw, dtype=float)
+    if values.shape != (2,) or not np.all(np.isfinite(values)):
+        raise ValueError("本地原点必须是两个有限数构成的 ENU XY 数组")
+    return np.array([values[0], values[1], 0.0])
+
+
+def local_ned_to_world_enu(position: Sequence[float] | np.ndarray, origin_enu: np.ndarray) -> np.ndarray:
+    return ned_to_enu_vector(position) + origin_enu
+
+
+def world_enu_to_local_ned(position: Sequence[float] | np.ndarray, origin_enu: np.ndarray) -> list[float]:
+    return enu_to_ned_list(np.asarray(position, dtype=float) - origin_enu)
+
+
 def wrap_angle(angle: float) -> float:
     return float((angle + math.pi) % (2.0 * math.pi) - math.pi)
 
@@ -143,6 +161,7 @@ def camera_pose_from_odometry(
     quaternion_wxyz: Sequence[float] | np.ndarray,
     mount_xyz_flu: Sequence[float] | np.ndarray,
     mount_rpy_rad: Sequence[float] | np.ndarray,
+    origin_enu: Sequence[float] | np.ndarray = (0.0, 0.0, 0.0),
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """合成安装平移/旋转和机体姿态，得到公共 ENU 下的相机位姿。
 
@@ -168,7 +187,10 @@ def camera_pose_from_odometry(
     if not np.all(np.isfinite(offset)) or not np.all(np.isfinite(rpy)):
         return None
 
-    body_position = ned_to_enu_vector(position)
+    origin = np.asarray(origin_enu, dtype=float)
+    if origin.shape != (3,) or not np.all(np.isfinite(origin)):
+        return None
+    body_position = local_ned_to_world_enu(position, origin)
     camera_position = body_position + body_rotation @ offset
     camera_rotation = body_rotation @ rotation_body_from_optical(rpy[0], rpy[1], rpy[2])
     return camera_position, camera_rotation

@@ -7,7 +7,7 @@ import numpy as np
 
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # “定高俯瞰”的 2D 追踪仿真：状态数组仍保存 [x, y, z]，但控制律只使用 XY。
-SCENARIOS = ("stationary", "linear", "circle")
+SCENARIOS = ("stationary", "linear", "circle", "table_occlusion")
 ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc")
 
 ALGORITHM_LABELS = {
@@ -43,6 +43,24 @@ class PursuerConfig:
 
 
 @dataclass(slots=True)
+class TableOcclusionConfig:
+    # 几何与 worlds/table_occlusion.sdf 对应；遮挡区间按目标实际位置判断，不按参考时间猜测。
+    center_x: float = 6.0
+    center_y: float = 0.0
+    length: float = 2.0
+    width: float = 2.0
+    underside_height: float = 2.5
+    start_x: float = 0.0
+    end_x: float = 12.0
+    speed: float = 0.5
+    acceleration: float = 0.5
+    hover_s: float = 3.0
+    # 这是目标机任务阶段的停稳检查，不是追踪重获成功判据。
+    position_tolerance: float = 0.15
+    velocity_tolerance: float = 0.10
+
+
+@dataclass(slots=True)
 class TargetConfig:
     # 目标固定在离地 1m；轨迹只在 XY 平面运动。
     fixed_altitude: float = 1.0
@@ -52,6 +70,7 @@ class TargetConfig:
     circle_center: np.ndarray = field(default_factory=lambda: np.array([35.0, 0.0, 1.0]))
     circle_radius: float = 12.0
     circle_omega: float = 0.25
+    table: TableOcclusionConfig = field(default_factory=TableOcclusionConfig)
 
 
 @dataclass(slots=True)

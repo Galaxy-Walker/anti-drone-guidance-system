@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from px4_msgs.msg import VehicleOdometry
 from rclpy.parameter import Parameter
 
 # `colcon test` 下没有额外的 PYTHONPATH：和 tests/test_camera_geometry.py 一样，
@@ -277,6 +278,7 @@ class TestInitialAcquisition:
             ("circle", (47.0, 0.0)),
             ("stationary", (40.0, 20.0)),
             ("linear", (25.0, -20.0)),
+            ("table_occlusion", (0.0, 0.0)),
         ],
     )
     def test_vision_mode_targets_scenario_start(self, scenario, start_xy) -> None:
@@ -438,6 +440,54 @@ class TestRecording:
         assert float(row["vision_valid"]) == 1.0
         assert float(row["target_x"]) == pytest.approx(10.0)
         assert float(row["target_est_x"]) == pytest.approx(3.0, abs=0.1)
+
+
+class TestTableOcclusion:
+    def test_lost_target_keeps_mission_running_and_records_table_mask(self, monkeypatch) -> None:
+        node = make_node(target_source="vision", scenario="table_occlusion", algorithm="pn_nmpc")
+        elapsed = {"s": 13.0}
+        monkeypatch.setattr(node, "_elapsed_seconds", lambda: elapsed["s"])
+        try:
+            set_vehicle_states(node, target_position=(6.0, 0.0, 1.0))
+            node._run_tracking_cycle(timestamp=0)
+            assert node._record_samples[-1].target_under_table
+            assert node._table_mission.departure_s is None
+            elapsed["s"] = 16.0
+            node._run_tracking_cycle(timestamp=0)
+            assert node._table_mission.departure_s == pytest.approx(16.0)
+            elapsed["s"] = 17.0
+            node._run_tracking_cycle(timestamp=0)
+            # 追踪机处于 hold，但目标机必须继续出桌，不能把目标任务也暂停。
+            assert node._target_setpoint_pub.messages[-1].position[1] > 6.0
+            assert node._target_setpoint_pub.messages[-1].velocity[1] == pytest.approx(0.5)
+            assert np.allclose(node._pursuer_setpoint_pub.messages[-1].velocity, 0.0)
+        finally:
+            node.destroy_node()
+
+    def test_world_origins_apply_to_odometry_and_position_setpoints(self) -> None:
+        node = make_node(
+            scenario="table_occlusion", target_source="vision",
+            pursuer_origin_xy=[-2.0, 0.0], target_origin_xy=[1.0, 0.0],
+        )
+        try:
+            pursuer_message = VehicleOdometry()
+            pursuer_message.position = [0.0, 2.0, -8.0]
+            pursuer_message.velocity = [0.0, 0.0, 0.0]
+            pursuer_message.q = [1.0, 0.0, 0.0, 0.0]
+            target_message = VehicleOdometry()
+            target_message.position = [0.0, -1.0, -1.0]
+            target_message.velocity = [0.0, 0.0, 0.0]
+            node._pursuer_odometry_callback(pursuer_message)
+            node._target_odometry_callback(target_message)
+            np.testing.assert_allclose(node._pursuer.position, [0.0, 0.0, 8.0])
+            np.testing.assert_allclose(node._target.position, [0.0, 0.0, 1.0])
+            node._ensure_pursuer_takeoff_position()
+            node._publish_pursuer_takeoff_setpoint(0, node._target.position)
+            node._publish_target_setpoint(0, node._target_start_reference())
+            np.testing.assert_allclose(node._pursuer_setpoint_pub.messages[-1].position, [0.0, 2.0, -8.0])
+            np.testing.assert_allclose(node._target_setpoint_pub.messages[-1].position, [0.0, -1.0, -1.0])
+        finally:
+            node.destroy_node()
 
 
 class TestPx4Timestamp:

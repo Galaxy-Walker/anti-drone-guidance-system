@@ -7,6 +7,9 @@ guidance_node_2d:
 
     pursuer_namespace: /px4_1
     target_namespace: /px4_2
+    # 两机本地原点的世界 ENU XY；必须与外部 PX4_GZ_MODEL_POSE 的 XY 对应。
+    pursuer_origin_xy: [0.0, 0.0]
+    target_origin_xy: [0.0, 0.0]
 
     auto_arm: true
     auto_offboard: true
@@ -21,7 +24,7 @@ guidance_node_2d:
     # Gazebo 目标机固定在离地 1m，ENU z 正向向上。
     target_base_altitude: 1.0
 
-    # 目标参考轨迹速度缩放：circle 缩放角速度（半径不变）、linear 缩放速度矢量，默认 1.0 与原轨迹一致。
+    # 目标参考轨迹速度缩放：circle 缩放角速度（半径不变）、linear 缩放速度矢量、table_occlusion 缩放巡航速度，默认 1.0 与原轨迹一致。
     target_speed_scale: 1.0
 
     target_start_position_tolerance: 0.75
@@ -63,6 +66,9 @@ vision_adapter:
     vision_source: off
     pursuer_namespace: /px4_1
     target_namespace: /px4_2
+    # 两机本地原点的世界 ENU XY；必须与外部 PX4_GZ_MODEL_POSE 的 XY 对应。
+    pursuer_origin_xy: [0.0, 0.0]
+    target_origin_xy: [0.0, 0.0]
 
     # P1 核验后填写的桥接光学系 frame；与 camera_bridge.yaml 的 frame_id 一致。
     camera_frame_id: camera_link_optical

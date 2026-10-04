@@ -178,6 +178,10 @@ yaw 用于描述二维俯瞰平面内的机头朝向。每个仿真步中，追�
 - 目标持续改变 LOS 方向，是二维追踪中更具挑战性的测试场景。
 - 适合观察 PN、MPPI 和 EMPC 对目标机动的响应能力。
 
+### 5.4 桌下遮挡场景
+
+`table_occlusion` 的目标参考以 0.5 m/s 沿 +X 从 `(0,0,1)` 飞到 `(12,0,1)`，在 `(6,0,1)` 悬停 3 秒；Gazebo 加入 2 × 2 m 桌面和实际停稳计时，用于观察视觉丢失后重新找回目标。纯 Python 同名场景只包含理想运动参考。启动与指标口径见 11.4 节。
+
 ## 6. 对比算法与框架原理
 
 | 算法名称 | 角色 | 主要功能 |
@@ -600,7 +604,7 @@ ros2 launch gazebosimulation2d guidance.launch.py debug_log:=true debug_log_peri
 
 ### 11.4 Gazebo 数据记录与后处理
 
-Gazebo CSV 的基础字段包括：时间、两机位置速度、追踪机实际发布的加速度指令、yaw 和 `distance_xy`。`target_source=vision` 时同一份 CSV 还会追加视觉列：`guidance_target_source`、`target_est_x/y`（以及 `target_est_vx/vy`、`target_est_ax/ay`）、`vision_valid`、`vision_age_s`、`vision_latency_s`、`vision_measurements` 和 `vision_error_xy`。**注意 `target_x/target_y` 始终是目标机 odometry 真值**，不是控制器实际消费的量；控制器在视觉模式下用的是 `target_est_*`（追踪机本体系），而 `vision_error_xy` 是"视觉估计 vs 目标 odometry"的跨机诊断量，含两机本地系原点差，不能当作量测精度。
+Gazebo CSV 的基础字段包括：时间、两机位置速度、追踪机实际发布的加速度指令、yaw、`distance_xy` 和 `target_under_table`。`target_source=vision` 时同一份 CSV 还会追加视觉列：`guidance_target_source`、`target_est_x/y`（以及 `target_est_vx/vy`、`target_est_ax/ay`）、`vision_valid`、`vision_age_s`、`vision_latency_s`、`vision_measurements` 和 `vision_error_xy`。**注意 `target_x/target_y` 始终是目标机 odometry 真值**，不是控制器实际消费的量；控制器在视觉模式下用的是 `target_est_*`。正确配置出生点原点参数后，真值与估计值都在公共 ENU 中；未配置原点的历史记录仍含本地原点差。`vision_error_xy` 是视觉估计与目标 odometry 的跨机诊断量，不能作为独立的量测精度标定。
 
 后处理命令示例：
 
@@ -621,10 +625,20 @@ uv run plot_gazebo_csv.py \
 uv run plot_vision_csv.py outputs/gazebo2d_vision --output-dir outputs/vision_report
 ```
 
-`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数，因此 Gazebo 结果可以和离线结果使用同一套评价指标进行比较。轨迹图例外：它由 `pythonsimulation2d/publication_plots.py` 按论文版式画成网格图（`trajectories_2x2.png`，衬线字体、等比例面板、四算法共用坐标范围，默认画完整记录、`--trajectory-window-s` 可截断），其余面板仍与离线仿真同款。两个口径需要注意：
+`plot_gazebo_csv.py` 复用离线仿真的指标计算和绘图函数。Gazebo 的 `metrics.png` 以平均水平追踪误差（`mean_distance`）替换捕获时间，适用于所有 Gazebo 追踪场景；纯 Python 的指标图保持捕获时间，CSV 仍保留该列以兼容历史工具。轨迹图由 `pythonsimulation2d/publication_plots.py` 按论文版式画成网格图（`trajectories_2x2.png`，默认画完整记录、`--trajectory-window-s` 可截断），其余面板沿用离线样式。两个口径需要注意：
 
 - **dt**：`plot_gazebo_csv.py` 用**第一个**跑批推断出的单一采样间隔渲染全部算法（`--dt` 可显式覆盖），而记录时间戳存在 ±6 ms 抖动；逐跑批统计控制能量或 yaw rate 时应按跑批各自的中位间隔（或逐样本 Δt 积分）计算，避免不同跑批中位间隔不同时引入偏差（如 2026-10-01 记录为 0.048 / 0.052 s，会让 MPPI/EMPC 这类数值差约 8%）。2026-10-04 复测四个跑批的中位间隔均为 0.050 s，两种口径相差 < 0.2%。
 - **捕获时间**：`target_source=vision` 的初始捕获流程会让两机在 t=0 时已落在 1.5 m 捕获半径内，捕获时间恒为 0，评估视觉闭环时应改用最大/平均水平距离。
+
+#### 桌下遮挡场景
+
+新增 `table_occlusion`：目标机以 0.5 m/s 沿 ENU +X 从 `(0,0,1)` 飞至 `(12,0,1)`，在 `(6,0,1)` 停稳后连续悬停 3 秒；速度参考在两段行程的起止处以 0.5 m/s² 加减速。Gazebo 任务依据真实 odometry（位置误差 ≤ 0.15 m、速度 ≤ 0.10 m/s）计时，未停稳或中途失稳就等待/重新计时。桌面长宽 2 × 2 m，下表面离地 2.5 m，具有不透明渲染与碰撞体；四条腿在目标直线路径两侧。世界与完整启动命令见 [模块 README](../README.md#桌下遮挡与重新找回目标)。
+
+使用真实 YOLO 视觉链路和 EMPC（`pn_nmpc`），沿用现有漏检预测、丢失悬停与新量测恢复机制，不增加主动搜索或重获判据。桌下区间按目标实际位置标记，水平误差曲线留空，最小/平均距离排除该区间；出桌后所有距离样本继续绘制与统计，包括还未重获视觉量测的样本。令有效索引集合 $\mathcal{V}$ 为目标不在桌下且距离有限的记录，则平均水平误差为
+
+$$\bar e_{xy}=\frac{1}{|\mathcal{V}|}\sum_{k\in\mathcal{V}}\left\|p_{T,xy}(t_k)-p_{P,xy}(t_k)\right\|_2.$$
+
+两机错开出生点时必须设置 `pursuer_origin_xy` / `target_origin_xy`，导引、视觉量测与指标统一到世界 ENU，位置指令在 ROS 边界转回各机本地 NED；默认零偏移保持旧行为。该新增场景尚未报告真实 Gazebo 闭环结果；纯 Python 同名场景只生成理想目标轨迹。
 
 ### 11.5 下视相机与视觉闭环
 

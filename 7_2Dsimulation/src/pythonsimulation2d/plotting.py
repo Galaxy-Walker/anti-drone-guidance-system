@@ -18,6 +18,12 @@ CORE_METRICS = (
     ("yaw_rate_variance", "Yaw rate variance", "(rad/s)^2", "{:.3f}"),
 )
 
+GAZEBO_TRACKING_METRICS = (
+    CORE_METRICS[0],
+    ("mean_distance", "Mean horizontal tracking error", "m", "{:.2f}"),
+    *CORE_METRICS[2:],
+)
+
 ALGORITHM_GRID = (2, 2)
 
 
@@ -68,16 +74,21 @@ def plot_scenario(
     show: bool = False,
     *,
     include_trajectory: bool = True,
+    tracking_metrics: bool = False,
+    distance_masks: dict[str, np.ndarray] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     # Gazebo 后处理的轨迹图改用 publication_plots 的论文版式，这里关掉默认样式的轨迹图，
     # 避免同一份记录出现两张口径不同的 trajectory_xy.png。
     if include_trajectory:
         _plot_trajectory_xy(scenario, results, output_dir, config)
-    _plot_distance_error(scenario, results, output_dir, config)
+    _plot_distance_error(scenario, results, output_dir, config, distance_masks)
     _plot_acceleration(scenario, results, output_dir)
     _plot_yaw_rate(scenario, results, output_dir, config)
-    _plot_metrics(scenario, metrics_table, output_dir)
+    _plot_metrics(
+        scenario, metrics_table, output_dir,
+        GAZEBO_TRACKING_METRICS if tracking_metrics else CORE_METRICS,
+    )
     if show:
         plt.show()
     else:
@@ -127,24 +138,30 @@ def _plot_distance_error(
     results: dict[str, SimulationResult],
     output_dir: Path,
     config: SimulationConfig,
+    distance_masks: dict[str, np.ndarray] | None = None,
 ) -> None:
     fig, axes = _make_algorithm_axes(results, figsize=(15, 8), sharex=True)
     for index, (ax, (algorithm, result)) in enumerate(zip(axes.ravel(), results.items())):
         color = _algorithm_color(index)
-        (line,) = ax.plot(result.time, result.distance, color=color)
-        min_index = int(np.argmin(result.distance))
-        min_time = result.time[min_index]
-        min_distance = result.distance[min_index]
-        color = line.get_color()
-        ax.scatter(min_time, min_distance, s=24, color=color, zorder=3)
-        ax.annotate(
-            f"{min_distance:.2f}m",
-            xy=(min_time, min_distance),
-            xytext=(4, 5),
-            textcoords="offset points",
-            fontsize=8,
-            color=color,
-        )
+        distance = result.distance.copy()
+        if distance_masks is not None:
+            distance[distance_masks[algorithm]] = np.nan
+        # NaN 保留遮挡的时间轴空白，不能删除这些点，否则出入桌两端会被直线连接。
+        (line,) = ax.plot(result.time, distance, color=color)
+        if np.any(np.isfinite(distance)):
+            min_index = int(np.nanargmin(distance))
+            min_time = result.time[min_index]
+            min_distance = distance[min_index]
+            color = line.get_color()
+            ax.scatter(min_time, min_distance, s=24, color=color, zorder=3)
+            ax.annotate(
+                f"{min_distance:.2f}m",
+                xy=(min_time, min_distance),
+                xytext=(4, 5),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+            )
         ax.axhline(config.capture_radius, color="k", linestyle=":", linewidth=1)
         ax.set_title(ALGORITHM_LABELS[algorithm])
         ax.grid(True, alpha=0.3)
@@ -195,11 +212,12 @@ def _plot_metrics(
     scenario: str,
     metrics_table: dict[str, dict[str, float]],
     output_dir: Path,
+    metric_specs: tuple = CORE_METRICS,
 ) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
     algorithms = list(metrics_table)
     labels = [_wrap_algorithm_label(ALGORITHM_LABELS[algorithm]) for algorithm in algorithms]
-    for ax, (metric, title, unit, value_format) in zip(axes.ravel(), CORE_METRICS):
+    for ax, (metric, title, unit, value_format) in zip(axes.ravel(), metric_specs):
         values = [metrics_table[algorithm][metric] for algorithm in algorithms]
         bars = ax.bar(labels, values)
         ax.set_title(f"{title} [{unit}]")
@@ -217,13 +235,13 @@ def _wrap_algorithm_label(label: str) -> str:
 
 
 def _annotate_bars(ax: plt.Axes, bars, values: list[float], value_format: str) -> None:
-    max_value = max(values) if values else 0.0
+    max_value = max((value for value in values if np.isfinite(value)), default=0.0)
     y_limit = max(max_value * 1.18, 1.0)
     ax.set_ylim(0.0, y_limit)
     for bar, value in zip(bars, values):
         ax.annotate(
-            value_format.format(value),
-            xy=(bar.get_x() + bar.get_width() * 0.5, value),
+            value_format.format(value) if np.isfinite(value) else "N/A",
+            xy=(bar.get_x() + bar.get_width() * 0.5, value if np.isfinite(value) else 0.0),
             xytext=(0, 4),
             textcoords="offset points",
             ha="center",

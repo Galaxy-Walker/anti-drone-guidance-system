@@ -13,6 +13,7 @@
 - `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
 - `tests/`：纯 Python 相机几何、目标估计器与 EMPC 画面保持（FOV）惩罚测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
+- `worlds/table_occlusion.sdf`：桌下遮挡世界，配合 `scenario:=table_occlusion`。
 - `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
 - [视觉设计参考](docs/vision_design.md)：相机几何、进程协议与消息约定。
@@ -155,7 +156,7 @@ param save                # 可选，参数变更后 PX4 会自动保存
 - 追踪机进入追踪阶段后使用速度 + 加速度 setpoint；二维导引输出的水平加速度作为 PX4 acceleration 前馈发布，position 字段不启用。
 - 导引、记录距离和指标均按 XY 平面计算；追踪阶段 z 速度和 z 加速度指令为 0。
 - `pursuer_fixed_altitude` 默认 8m，用于 2D 仿真配置和结果标注；当前追踪阶段不再通过 position setpoint 强制拉高度。
-- `target_speed_scale`（默认 1.0）只缩放目标机参考轨迹的速度：`circle` 缩放角速度（半径不变）、`linear` 缩放速度矢量、`stationary` 不受影响；用于不同目标速度的对比实验，起止点与控制算法参数不变。
+- `target_speed_scale`（默认 1.0）只缩放目标机参考轨迹的速度：`circle` 缩放角速度（半径不变）、`linear` 缩放速度矢量、`table_occlusion` 缩放巡航速度（默认 0.5 m/s）、`stationary` 不受影响；起止点与控制算法参数不变。
 
 开启 0.2s 周期 ROS 调试日志：
 
@@ -231,8 +232,8 @@ PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_
 说明：
 
 - Gazebo 由终端 3 手动启动，PX4 两机都只连接：实例 0 自动检测已运行的世界，实例 1 带 `PX4_GZ_STANDALONE=1`；不会再起 server 造成冲突。
-- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `48,0`（追踪机）/ `47,0`（目标机），x 相差 1 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-10-04 复测 ≈ 1 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
-- `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `src/pythonsimulation2d/config.py`），目标机同时被送往同一起点（各自按本地系解释），保证开始跟踪时目标在相机视野内；spawn 错开带来的本地系偏差见上一条。
+- 两机 spawn 的 XY 决定各自 PX4 本地原点。现在可通过 `pursuer_origin_xy` / `target_origin_xy` 指定出生点的世界 ENU XY：导引节点与视觉适配器统一转换到公共 ENU，位置 setpoint 再转换回各机本地 NED。默认 `[0.0, 0.0]` 保持旧行为；上述 `48,0` / `47,0` 示例应分别传入 `'[48.0, 0.0]'` / `'[47.0, 0.0]'`。旧记录未做转换，跨机误差含约 1 m 的原点偏差（见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），新增参数不会修正历史 CSV。
+- `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为公共 ENU `(47, 0)`，即 `circle_center + (12, 0)`），目标机同时被送往同一起点；传入正确原点后，两机在世界中的实际 XY 也相同。
 - airframe 自带 `PX4_GZ_WORLD=default`，所以 `src/gazebosimulation2d/config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
 - 新环境首次运行相机机型前需 `make px4_sitl gz_x500_mono_cam_down`（本机 SITL 已编译）。
 - 两个实例的 GCS MAVLink 本地端口分别是 18570/18571（见上一节 QGC 备忘录）。
@@ -468,10 +469,58 @@ basic, pn, pn_mppi, pn_nmpc
 场景：
 
 ```text
-stationary, linear, circle
+stationary, linear, circle, table_occlusion
 ```
 
 `pn_nmpc` 是候选枚举式预测控制（文档称 EMPC），代价函数除距离、控制、平滑和 PN 趋势项外还包含画面保持（FOV）惩罚：把预测目标投影到标称下视相机的图像平面，归一化偏移超过软边界后加重回中、接近边缘时惩罚最强。权重与相机参数在 `src/pythonsimulation2d/config.py` 的 `nmpc_w_fov`、`fov_*` 字段中，原理与 Gazebo 验证见 [算法说明](docs/2d_simulation_guidance_overview.md) 7.4.1 和 12.5 节。
+
+## 桌下遮挡与重新找回目标
+
+`table_occlusion` 使用不透明的 2 × 2 m 桌面（厚 0.15 m、下表面离地 2.5 m）与四条带碰撞体的桌腿。桌子中心是世界 ENU `(6, 0)`，目标机在 1 m 高度从 `(0, 0)` 沿 +X 飞至 `(12, 0)`。巡航速度默认 **0.5 m/s**，以 0.5 m/s² 的梯形速度参考起步、减速并停在桌子中心。参考到达后，目标实际位置误差 ≤ 0.15 m 且实际速度 ≤ 0.10 m/s 时开始计时，连续停稳 **3 秒仿真时间**后再继续前进；期间不稳定就重新计时。终点保持悬停。理想轨迹约 29 秒，默认记录 40 秒，留出停稳和出桌恢复的观察时间。
+
+实验先使用 `pn_nmpc`（EMPC）。真实图像遮挡使 YOLO 漏检，追踪机沿用现有 `tracking → coast → lost/hold`；出桌后接受到视觉量测即恢复导引，不增加主动搜索或重获成功阈值。`truth` 旁路不消费图像、不处理桌子遮挡，不能用于此实验。纯 Python 的同名场景仅复用目标参考轨迹，不模拟真实桌面遮挡或实际停稳等待。
+
+按前面的五个外部终端准备环境，做以下调整（Gazebo 世界名仍为 `default`，相机桥接话题无需更改）：
+
+```bash
+# Gazebo 终端：用新世界替换 default.sdf；不与旧世界同时运行
+gz sim -r -s /home/srcbit/anti-drone/anti-drone-guidance-system/7_2Dsimulation/worlds/table_occlusion.sdf
+
+# 追踪机终端：在 PX4 目录、source gz_env.sh 后运行，出生点错开 2 m
+PX4_SYS_AUTOSTART=4014 PX4_GZ_MODEL_POSE="-2,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_1 \
+  ./build/px4_sitl_default/bin/px4 -i 0
+
+# 目标机终端：在 PX4 目录、source gz_env.sh 后运行
+PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="0,0,0,0,0,0" PX4_UXRCE_DDS_NS=px4_2 \
+  ./build/px4_sitl_default/bin/px4 -i 1
+```
+
+在 `7_2Dsimulation/` 中构建并 source 后启动导引，原点参数必须与上述出生点配套：
+
+```bash
+ros2 launch gazebosimulation2d guidance.launch.py \
+  algorithm:=pn_nmpc scenario:=table_occlusion \
+  enable_camera:=true vision_source:=yolo target_source:=vision use_sim_time:=true \
+  pursuer_origin_xy:='[-2.0, 0.0]' target_origin_xy:='[0.0, 0.0]' \
+  target_speed_scale:=1.0 sim_time:=40.0 \
+  yolo_python:=/home/srcbit/miniconda3/envs/ultralytics/bin/python \
+  yolo_model_path:=/home/srcbit/anti-drone/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.engine \
+  record_camera:=true debug_log:=true \
+  record_output_dir:=outputs/gazebo2d_vision_runs \
+  vision_record_output_dir:=outputs/table_occlusion_vision \
+  yolo_stats_csv:=outputs/table_occlusion_vision/yolo_detections.csv
+
+# 观察出桌后的检测与追踪恢复，满 40 秒后 Ctrl-C 保存导引记录，再绘图
+uv run plot_gazebo_csv.py \
+  outputs/gazebo2d_vision_runs/table_occlusion/pn_nmpc/gazebo_samples.csv
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `pursuer_origin_xy` | `[0.0, 0.0]` | 追踪机本地原点的世界 ENU XY，导引与视觉适配共用 |
+| `target_origin_xy` | `[0.0, 0.0]` | 目标机本地原点的世界 ENU XY，导引与视觉适配共用 |
+
+桌子几何与任务默认值在 `config.py` 的 `TableOcclusionConfig`；改变桌子尺寸/位置时也要同步 `worlds/table_occlusion.sdf`。这些 XY 原点参数适用于地面出生且 NED 轴向一致的当前双机配置，不包含旋转或高度原点补偿。
 
 ## 记录后处理与绘图
 
@@ -502,6 +551,10 @@ metrics.png
 vision_estimate.png              # 单算法记录且含视觉估计列时
 vision_estimate_<algorithm>.png  # 多算法场景目录且含视觉估计列时
 ```
+
+所有 Gazebo 追踪场景的 `metrics.png` 用 **平均水平追踪误差**（`mean_distance`，m）替换拦截时间；其余三个面板保持最小距离、平均 yaw rate 和 yaw rate 方差。纯 Python 的 `metrics.png` 保留捕获时间，`metrics.csv` 仍保留 `capture_time` 列以兼容已有后处理。
+
+`distance_error.png` 显示追踪机与目标机 odometry 真值的 XY 距离随时间变化。`table_occlusion` 的桌下样本按实际位置记录为 `target_under_table=1`：曲线留空、最小/平均距离排除这一段，其他控制指标使用完整记录。出桌后即恢复曲线，即使此时尚未重新检测到目标也保留误差，以显示恢复过程。旧 CSV 缺少桌下标志时按默认桌子几何和实际目标位置补算；其他场景使用全部有效距离样本。平均误差采用样本算术平均；整段均在桌下时距离指标为 NaN，柱状图标为 N/A。原始 `distance_xy` 始终完整保留，桌下标志不参与控制或检测。
 
 轨迹图由 `src/pythonsimulation2d/publication_plots.py` 绘制：衬线字体、等比例面板、四个算法共用一组
 坐标范围，尺寸按英寸排版（不受 `tight_layout` 拉伸）。其余面板沿用离线仿真的默认样式，两套样式互不影响。

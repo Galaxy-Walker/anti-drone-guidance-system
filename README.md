@@ -55,7 +55,7 @@ code/
 ├── 4_fsm/                  # Offboard 有限状态机（C++ 原版 + Python 迁移版）
 ├── 5_AntiDrone/            # PX4 Offboard + PN 闭环拦截（当前主线）
 ├── 6_Simulation/           # 轻量 3D 多算法对比仿真 + Gazebo 双机接入（当前主线）
-├── 7_2Dsimulation/         # 二维定高俯瞰追踪仿真
+├── 7_2Dsimulation/         # 二维定高追踪 + YOLO 视觉闭环与桌下遮挡重获场景
 ├── 8_MoCap/                # 室内动捕悬停与位姿桥接
 ├── pyproject.toml          # Python 项目配置与依赖
 ├── uv.lock                 # uv 依赖锁定文件

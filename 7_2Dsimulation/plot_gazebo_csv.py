@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 from pythonsimulation2d.config import ALGORITHMS, SCENARIOS, SimulationConfig  # noqa: E402
 from pythonsimulation2d.metrics import compute_scenario_metrics, write_metrics_csv  # noqa: E402
 from pythonsimulation2d.state import SimulationResult  # noqa: E402
+from pythonsimulation2d.target import target_under_table  # noqa: E402
 
 
 CSV_FIELDS = (
@@ -105,16 +106,47 @@ def main() -> None:
     sim_time = args.sim_time if args.sim_time is not None else max(float(result.time[-1]) for result in results.values())
     config = SimulationConfig(dt=dt, sim_time=sim_time)
 
-    metrics_table = compute_scenario_metrics(results, config)
+    distance_masks = {
+        algorithm: read_table_mask(csv_by_algorithm[algorithm], result, config)
+        for algorithm, result in results.items()
+    }
+    metrics_table = compute_gazebo_metrics(results, config, distance_masks)
     write_metrics_csv(metrics_table, output_dir)
     # 轨迹图换成论文版式的网格图，其余四个面板仍复用离线仿真的绘图口径。
-    plot_scenario(scenario, results, metrics_table, output_dir, config, show=args.show, include_trajectory=False)
+    plot_scenario(
+        scenario, results, metrics_table, output_dir, config, show=args.show,
+        include_trajectory=False, tracking_metrics=True, distance_masks=distance_masks,
+    )
     trajectory_path = plot_trajectory_panels(results, output_dir, window_s=args.trajectory_window_s)
     vision_plots = _plot_vision_panels(scenario, results, csv_by_algorithm, output_dir)
     print(f"Saved Gazebo 2D plots and metrics to {output_dir}")
     print(f"  trajectory: {trajectory_path.name}")
     if vision_plots:
         print(f"Saved {vision_plots} vision estimate figure(s) to {output_dir}")
+
+
+def read_table_mask(csv_path: Path, result: SimulationResult, config: SimulationConfig) -> np.ndarray:
+    """优先使用记录时的桌下标志；旧 CSV 按实际位置与场景桌面几何补算。"""
+    if result.scenario != "table_occlusion":
+        return np.zeros(result.time.shape, dtype=bool)
+    with csv_path.open(newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        if "target_under_table" in (reader.fieldnames or []):
+            return np.array([float(row["target_under_table"]) >= 0.5 for row in reader], dtype=bool)
+    return target_under_table(result.target_position, config.target.table)
+
+
+def compute_gazebo_metrics(
+    results: dict[str, SimulationResult], config: SimulationConfig,
+    distance_masks: dict[str, np.ndarray],
+) -> dict[str, dict[str, float]]:
+    """误差曲线与距离统计使用相同样本，其他指标仍保留完整控制记录。"""
+    metrics_table = compute_scenario_metrics(results, config)
+    for algorithm, result in results.items():
+        distances = result.distance[~distance_masks[algorithm] & np.isfinite(result.distance)]
+        metrics_table[algorithm]["mean_distance"] = float(np.mean(distances)) if distances.size else np.nan
+        metrics_table[algorithm]["min_distance"] = float(np.min(distances)) if distances.size else np.nan
+    return metrics_table
 
 
 def _plot_vision_panels(
