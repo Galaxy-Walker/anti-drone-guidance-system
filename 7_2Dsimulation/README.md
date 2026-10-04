@@ -10,6 +10,7 @@
 - `src/pythonsimulation2d/`：2D 目标、动力学、导引、估计器和绘图代码。
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
 - `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
+- `tools/prelabel_yolo_images.py`：合并相机截图，用已有权重生成供人工修正的 YOLO 预标注。
 - `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
 - `tests/`：纯 Python 相机几何、目标估计器与 EMPC 画面保持（FOV）惩罚测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
@@ -410,6 +411,25 @@ ros2 launch gazebosimulation2d guidance.launch.py \
 ```
 
 输出 `eval_report.csv` / `eval_report.md`：Recall@IoU0.3/0.5、匹配框中心像素误差 p50/p95、背景帧误检，并扫描 conf ∈ [0.1, 0.5]。门槛：Recall@IoU0.3 ≥ 0.8（conf=0.25）可直接闭环；0.5～0.8 降 conf + 门控后继续；< 0.5 进入域适配微调。
+
+### 相机截图合并与微调预标注
+
+用已有 conda `ultralytics` 环境运行，不需要 ROS，也不向根 uv 项目添加依赖。在 `7_2Dsimulation` 下执行：
+
+```bash
+/home/srcbit/miniconda3/envs/ultralytics/bin/python tools/prelabel_yolo_images.py \
+  --source outputs/table_occlusion_frames \
+  --runs run1 run2 \
+  --weights /home/srcbit/ultralytics-main/runs/detect/yolo26_baseline_detfly/weights/best.pt \
+  --output /home/srcbit/table_occlusion_prelabel \
+  --conf 0.10 --imgsz 640 --device 0
+```
+
+脚本复制原图，将两个批次展平到 `images/`，文件名加 `run1_` / `run2_` 前缀以避免重名；`labels/` 保存每张图片同名的五列 YOLO 归一化标签（不含置信度），没有检测时也创建空标签；`previews/` 保存画框预览，`classes.txt` 保留模型类别顺序，`manifest.csv` 记录源文件映射与检测数量，`summary.json` 记录推理配置与汇总。
+
+默认 `conf=0.10` 用于减少预标注漏检，需人工删除误检、补充漏检并修正框。空标签须复核，不能直接当作背景真值；人工标注和微调都使用 `images/` 原图，预览图仅供检查。人工修订完成后再划分训练集/验证集，避免相邻视频帧随机分到两边造成数据泄漏。
+
+已有输出目录会被拒绝，以保护人工修改过的标签。重跑时用 `--output` 指定新目录；快速检查可加 `--limit 16`，省略预览可加 `--no-previews`，CPU 推理可用 `--device cpu`。
 
 ### 绘图
 
