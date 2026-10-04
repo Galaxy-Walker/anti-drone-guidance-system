@@ -16,7 +16,7 @@
 - `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
 - [视觉设计参考](docs/vision_design.md)：相机几何、进程协议与消息约定。
-- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：离线验证结果与 2026-09-30 闭环实测记录。
+- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：离线验证结果与 2026-10-04 闭环复测记录。
 
 ## 纯 Python 仿真
 
@@ -230,7 +230,7 @@ PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="47,0,0,0,0,0" PX4_
 说明：
 
 - Gazebo 由终端 3 手动启动，PX4 两机都只连接：实例 0 自动检测已运行的世界，实例 1 带 `PX4_GZ_STANDALONE=1`；不会再起 server 造成冲突。
-- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `48,0`（追踪机）/ `47,0`（目标机），x 相差 1 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-09-30 实测 ≈ 2 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
+- 两机 spawn 的 XY 决定各自 PX4 本地原点：示例 `48,0`（追踪机）/ `47,0`（目标机），x 相差 1 m，两机 odometry 的本地系也就相差这个常值。视觉闭环在追踪机本地系内工作、不受影响；但跨机比较的列（`vision_samples.csv` 的 `position_error_vs_odom_m`、`gazebo_samples.csv` 的 `distance_xy`/`target_x,y`）会整体带上该偏差（2026-10-04 复测 ≈ 1 m，见 [视觉验证记录](docs/yolo_vision_closed_loop_results.md) 4.1），不要据此判读量测精度。需要无偏的跨机指标时，应让两机同点 spawn，或在 ROS 边界显式做原点转换。
 - `target_source=vision` 时追踪机准备阶段会自动飞至场景起点上方（circle 为 `(47, 0)`，即 `circle_center + (12, 0)`，见 `src/pythonsimulation2d/config.py`），目标机同时被送往同一起点（各自按本地系解释），保证开始跟踪时目标在相机视野内；spawn 错开带来的本地系偏差见上一条。
 - airframe 自带 `PX4_GZ_WORLD=default`，所以 `src/gazebosimulation2d/config/camera_bridge.yaml` 里的 `/world/default/model/x500_mono_cam_down_0/...` 话题名成立；**不要再额外传 `PX4_SIM_MODEL`**（例如 `PX4_SIM_MODEL=gz_x500` 会把 4014 的相机模型覆盖成 `x500`，桥接就收不到图像）。
 - 新环境首次运行相机机型前需 `make px4_sitl gz_x500_mono_cam_down`（本机 SITL 已编译）。
@@ -447,6 +447,7 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 ```bash
 uv run python tests/test_camera_geometry.py
 uv run python tests/test_target_filter.py
+uv run python tests/test_fov_penalty.py
 ```
 
 ROS 节点测试（假 worker，不需要 torch/GPU）：
