@@ -26,6 +26,8 @@ class GuidanceMemory:
     # NMPC/MPPI 平滑项需要知道上一步实际使用的水平加速度。
     previous_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     mppi_rng: np.random.Generator | None = None
+    # PID 积分项：跨控制步累积 XY 位置误差，按 pid_integral_limit 限幅。
+    pid_integral: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
 
 @dataclass(slots=True)
@@ -62,6 +64,42 @@ def pn_guidance(pursuer: PursuerState, target: TargetState, config: SimulationCo
     return clamp_norm_xy(a_pn + a_close, config.pursuer.a_max)
 
 
+def pid_guidance(
+    pursuer: PursuerState,
+    target: TargetState,
+    memory: GuidanceMemory,
+    config: SimulationConfig,
+    dt: float,
+) -> np.ndarray:
+    """单环位置 PID：位置误差的 P/I/D 线性组合直接给出水平加速度指令。
+
+    - P 项 `kp * (p_t - p_p)`：把追踪机拉向目标当前位置；
+    - I 项 `ki * ∫(p_t - p_p) dt`：消除静止/匀速场景的稳态位置偏差；
+    - D 项 `kd * (v_t - v_p)`：以相对速度误差提供阻尼，等价于对位置误差求导；
+    - 积分向量按 `pid_integral_limit` 限范数抗饱和，输出再受 a_max 约束。
+
+    与 PN 类方法不同，该控制律不使用 LOS 角速度或预测模型，是纯反馈基线。
+    """
+    guidance = config.guidance
+    position_error = target.position - pursuer.position
+    velocity_error = target.velocity - pursuer.velocity
+
+    integral = memory.pid_integral.copy()
+    integral[:2] += position_error[:2] * dt
+    integral[2] = 0.0
+    integral_norm = norm_xy(integral)
+    if integral_norm > guidance.pid_integral_limit and integral_norm >= EPS:
+        integral[:2] *= guidance.pid_integral_limit / integral_norm
+    memory.pid_integral = integral
+
+    acceleration = (
+        guidance.pid_kp * position_error
+        + guidance.pid_ki * integral
+        + guidance.pid_kd * velocity_error
+    )
+    return clamp_norm_xy(acceleration, config.pursuer.a_max)
+
+
 def compute_guidance(
     algorithm: str,
     pursuer: PursuerState,
@@ -70,12 +108,12 @@ def compute_guidance(
     config: SimulationConfig,
     dt: float,
 ) -> GuidanceResult:
-    del dt  # 当前导引律的离散步长由 config.dt/guidance.mpc_dt 统一管理。
-
     if algorithm == "basic":
         acceleration = direct_pursuit(pursuer, target, config)
     elif algorithm == "pn":
         acceleration = pn_guidance(pursuer, target, config)
+    elif algorithm == "pid":
+        acceleration = pid_guidance(pursuer, target, memory, config, dt)
     elif algorithm == "pn_nmpc":
         pn_trend = pn_guidance(pursuer, target, config)
         acceleration = nmpc_acceleration(pursuer, target, pn_trend, memory, config)

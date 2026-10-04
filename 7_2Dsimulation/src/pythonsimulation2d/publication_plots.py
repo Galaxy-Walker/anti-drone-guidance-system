@@ -37,6 +37,7 @@ PANEL_STYLES = {
     "pn": ("#ff7f0e", 1.00),
     "pn_mppi": ("#2ca02c", 0.55),
     "pn_nmpc": ("#d62728", 0.55),
+    "pid": ("#9467bd", 1.00),
 }
 TARGET_COLOR = "#a6a6a6"
 TARGET_DASHES = (0.0, (1.0, 1.6))

@@ -107,7 +107,7 @@ colcon test --packages-select px4_mocap_hover && colcon test-result --verbose
 
 - 算法/场景名单只在对应 `config.py` 的 `ALGORITHMS`、`SCENARIOS`、`ALGORITHM_LABELS` 中定义：
   - 6_Simulation：`basic`、`basic_fov`、`pn_fov`、`pn_fov_cbf`、`pn_fov_mppi`、`pn_fov_nmpc`
-  - 7_2Dsimulation：`basic`、`pn`、`pn_mppi`、`pn_nmpc`
+  - 7_2Dsimulation：`basic`、`pn`、`pn_mppi`、`pn_nmpc`、`pid`
 - 新增算法必须同时更新：`config.py` → `guidance.compute_guidance()` 分支 → 标签/绘图 → launch 默认值与 README/文档。
 - **已知文档漂移**：`6_Simulation/README.md` 的算法表仍写作 `pn`（实际代码是 `basic_fov`），且部分描述停留在 last-seen 预测（现为 α-β 滤波）。改算法时以 `config.py` 与 `docs/` 为准，并顺手修正 README。
 - `pn_nmpc` / `nmpc_acceleration()` / `nmpc_w_*` 是历史代码标识，文档中把该候选枚举式控制器称为 **EMPC**（Enumerative MPC）。**不要重命名代码标识**（会破坏 CLI、输出目录与已生成图表），只在文档里注明二者等价。
