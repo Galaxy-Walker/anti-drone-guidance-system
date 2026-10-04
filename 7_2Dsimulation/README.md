@@ -11,7 +11,7 @@
 - `src/gazebosimulation2d/`：ROS2/PX4/Gazebo Offboard 接入包，含视觉检测、适配与相机记录节点。
 - `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
 - `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
-- `tests/`：纯 Python 相机几何、目标估计器与 EMPC 画面保持（FOV）惩罚测试。
+- `tests/`：纯 Python 相机几何、目标估计器、EMPC 画面保持（FOV）惩罚与 PID 导引测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
 - `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
@@ -449,6 +449,7 @@ worker 离线自检（不需要 ROS/Gazebo，坐标应与 `ultralytics-main/pred
 uv run python tests/test_camera_geometry.py
 uv run python tests/test_target_filter.py
 uv run python tests/test_fov_penalty.py
+uv run python tests/test_pid_guidance.py
 ```
 
 ROS 节点测试（假 worker，不需要 torch/GPU）：
@@ -462,7 +463,7 @@ colcon test --packages-select gazebosimulation2d && colcon test-result --verbose
 算法：
 
 ```text
-basic, pn, pn_mppi, pn_nmpc
+basic, pn, pn_mppi, pn_nmpc, pid
 ```
 
 场景：
@@ -472,6 +473,8 @@ stationary, linear, circle
 ```
 
 `pn_nmpc` 是候选枚举式预测控制（文档称 EMPC），代价函数除距离、控制、平滑和 PN 趋势项外还包含画面保持（FOV）惩罚：把预测目标投影到标称下视相机的图像平面，归一化偏移超过软边界后加重回中、接近边缘时惩罚最强。权重与相机参数在 `src/pythonsimulation2d/config.py` 的 `nmpc_w_fov`、`fov_*` 字段中，原理与 Gazebo 验证见 [算法说明](docs/2d_simulation_guidance_overview.md) 7.4.1 和 12.5 节。
+
+`pid` 是单环位置 PID 对照：对 XY 位置误差做比例-积分-微分（D 项取相对速度误差），直接输出加速度，积分按范数限幅抗饱和；参数 `pid_kp`、`pid_ki`、`pid_kd`、`pid_integral_limit` 在三种离线场景上网格整定，原理、整定方法与离线对比结果见 [算法说明](docs/2d_simulation_guidance_overview.md) 6.5 和 10 节。本轮只做离线对比，Gazebo/视觉闭环未复测。
 
 ## 记录后处理与绘图
 
@@ -503,7 +506,7 @@ vision_estimate.png              # 单算法记录且含视觉估计列时
 vision_estimate_<algorithm>.png  # 多算法场景目录且含视觉估计列时
 ```
 
-轨迹图由 `src/pythonsimulation2d/publication_plots.py` 绘制：衬线字体、等比例面板、四个算法共用一组
+轨迹图由 `src/pythonsimulation2d/publication_plots.py` 绘制：衬线字体、等比例面板、各算法共用一组
 坐标范围，尺寸按英寸排版（不受 `tight_layout` 拉伸）。其余面板沿用离线仿真的默认样式，两套样式互不影响。
 默认画完整记录，需要截断时用 `--trajectory-window-s`：
 
