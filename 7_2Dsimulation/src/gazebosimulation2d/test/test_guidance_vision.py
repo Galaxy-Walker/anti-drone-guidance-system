@@ -125,6 +125,27 @@ class TestParameters:
         with pytest.raises(ValueError):
             make_node(target_source="vision", min_dt_s=0.5, max_dt_s=0.1)
 
+    def test_target_speed_scale_scales_circle_omega(self) -> None:
+        node = make_node(scenario="circle", target_speed_scale=0.5)
+        try:
+            # 半径与起点不变，只把角速度（即线速度）减半。
+            assert node._config.target.circle_omega == pytest.approx(0.125)
+            assert node._config.target.circle_radius == pytest.approx(12.0)
+        finally:
+            node.destroy_node()
+
+    def test_target_speed_scale_scales_linear_velocity(self) -> None:
+        node = make_node(scenario="linear", target_speed_scale=2.0)
+        try:
+            assert node._config.target.linear_velocity[0] == pytest.approx(4.0)
+            assert node._config.target.linear_velocity[1] == pytest.approx(2.0)
+        finally:
+            node.destroy_node()
+
+    def test_non_positive_target_speed_scale_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            make_node(target_speed_scale=0.0)
+
 
 class TestVisionTargetState:
     def make_vision_node(self, monkeypatch, **overrides):

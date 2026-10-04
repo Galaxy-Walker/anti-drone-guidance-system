@@ -155,6 +155,7 @@ param save                # 可选，参数变更后 PX4 会自动保存
 - 追踪机进入追踪阶段后使用速度 + 加速度 setpoint；二维导引输出的水平加速度作为 PX4 acceleration 前馈发布，position 字段不启用。
 - 导引、记录距离和指标均按 XY 平面计算；追踪阶段 z 速度和 z 加速度指令为 0。
 - `pursuer_fixed_altitude` 默认 8m，用于 2D 仿真配置和结果标注；当前追踪阶段不再通过 position setpoint 强制拉高度。
+- `target_speed_scale`（默认 1.0）只缩放目标机参考轨迹的速度：`circle` 缩放角速度（半径不变）、`linear` 缩放速度矢量、`stationary` 不受影响；用于不同目标速度的对比实验，起止点与控制算法参数不变。
 
 开启 0.2s 周期 ROS 调试日志：
 

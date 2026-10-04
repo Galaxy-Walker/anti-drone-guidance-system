@@ -246,6 +246,7 @@ class GuidanceNode(Node):
             f"guidance_node_2d ready: algorithm={self._algorithm}, scenario={self._scenario}, "
             f"pursuer={self._pursuer_namespace}, target={self._target_namespace}, "
             f"pursuer_fixed_altitude={self._pursuer_fixed_altitude:.2f}m, "
+            f"target_speed_scale={self._target_speed_scale:.2f}, "
             f"target_source={self._target_source}"
         )
 
@@ -262,6 +263,7 @@ class GuidanceNode(Node):
         self.declare_parameter("dt", 0.05)
         self.declare_parameter("pursuer_fixed_altitude", 8.0)
         self.declare_parameter("target_base_altitude", 1.0)
+        self.declare_parameter("target_speed_scale", 1.0)
         self.declare_parameter("target_start_position_tolerance", 0.75)
         self.declare_parameter("target_start_velocity_tolerance", 0.75)
         self.declare_parameter("pursuer_takeoff_position_tolerance", 0.75)
@@ -306,6 +308,15 @@ class GuidanceNode(Node):
         self._config = SimulationConfig(dt=dt, sim_time=sim_time)
         self._config.pursuer.fixed_altitude = self._pursuer_fixed_altitude
         self._config.pursuer.initial_position[2] = self._pursuer_fixed_altitude
+
+        # 目标参考轨迹速度缩放：circle 缩角速度（半径不变）、linear 缩速度矢量；stationary 不变。
+        self._target_speed_scale = self._finite_float("target_speed_scale")
+        if self._target_speed_scale <= 0.0:
+            raise ValueError("target_speed_scale 必须为正")
+        self._config.target.circle_omega *= self._target_speed_scale
+        self._config.target.linear_velocity = (
+            self._config.target.linear_velocity * self._target_speed_scale
+        )
 
         self._target_base_altitude = float(self.get_parameter("target_base_altitude").value)
         self._load_vision_parameters()
