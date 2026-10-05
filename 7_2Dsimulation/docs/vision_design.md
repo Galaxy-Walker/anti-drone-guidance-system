@@ -128,6 +128,8 @@ $$\hat p_k^-=\hat p_{k-1}+\hat v_{k-1}\Delta t,\qquad
 - 状态机：`tracking → coast`（无新量测超过 `vision_coast_s=0.3 s`）`→ lost`（超过 `vision_loss_s=1.0 s`）`→ tracking`（重捕获）；
 - `lost` 时 `guidance_node_2d` 进入 hold：`velocity=[0,0,0]`、`accel=0`、保持 yaw（现有 `_publish_pursuer_setpoint` 在
   `accel=0` 时会发当前速度，hold 必须单独发零速 setpoint）。
+- `algorithm=pid` 共用上述目标估计，D 项使用滤波目标速度与追踪机 odometry 速度之差；预测期间继续积分，
+  hold 时清零积分且悬停期间不累积，新有效量测到来后恢复跟踪、从零重新积分，不回退目标 odometry。
 
 ### 5.1 初始捕获（仿真约定）
 

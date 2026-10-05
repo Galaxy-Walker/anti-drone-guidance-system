@@ -8,13 +8,14 @@ import numpy as np
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # “定高俯瞰”的 2D 追踪仿真：状态数组仍保存 [x, y, z]，但控制律只使用 XY。
 SCENARIOS = ("stationary", "linear", "circle", "table_occlusion")
-ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc")
+ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc", "pid")
 
 ALGORITHM_LABELS = {
     "basic": "2D direct pursuit",
     "pn": "2D PN",
     "pn_mppi": "2D PN + MPPI",
     "pn_nmpc": "2D PN + NMPC",
+    "pid": "2D PID tracking",
 }
 
 # 论文插图的面板标题：比 ALGORITHM_LABELS 更短，和正文表格里的叫法一致。
@@ -24,6 +25,7 @@ ALGORITHM_PANEL_LABELS = {
     "pn": "PN-only",
     "pn_mppi": "PN-guided MPPI",
     "pn_nmpc": "PN-guided E-MPC",
+    "pid": "PID tracking",
 }
 
 
@@ -121,6 +123,17 @@ class GuidanceConfig:
     mppi_noise_scale: float = 2.5
     mppi_temperature: float = 6.0
     mppi_seed: int = 7
+    # 单环位置 PID：对 XY 位置误差做比例-积分-微分，D 项直接取相对速度误差
+    # （v_t - v_p，等价于位置误差的导数），输出水平加速度。
+    # 不显式引入目标加速度前馈，保证与不预测目标机动的基线口径一致。
+    # 默认值在三种离线场景上网格整定，取 kp/kd 使闭环近似二阶系统
+    # ω_n = sqrt(kp) ≈ 1.58 rad/s、ζ = kd/(2 sqrt(kp)) ≈ 0.82；ki 只做慢速偏置消除。
+    pid_kp: float = 2.5
+    pid_ki: float = 0.1
+    pid_kd: float = 2.6
+    # 积分向量范数上限（单位 m*s），作为抗饱和：接近段大误差持续时间长，
+    # 不限制积分会在进入捕获半径后产生明显过冲。
+    pid_integral_limit: float = 3.0
 
 
 @dataclass(slots=True)

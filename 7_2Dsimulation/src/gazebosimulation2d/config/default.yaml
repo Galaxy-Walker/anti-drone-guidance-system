@@ -27,6 +27,12 @@ guidance_node_2d:
     # 目标参考轨迹速度缩放：circle 缩放角速度（半径不变）、linear 缩放速度矢量、table_occlusion 缩放巡航速度，默认 1.0 与原轨迹一致。
     target_speed_scale: 1.0
 
+    # 单环位置 PID 参数（algorithm=pid 时生效）；默认值与 src/pythonsimulation2d/config.py 一致。
+    pid_kp: 2.5
+    pid_ki: 0.1
+    pid_kd: 2.6
+    pid_integral_limit: 3.0
+
     target_start_position_tolerance: 0.75
     target_start_velocity_tolerance: 0.75
     pursuer_takeoff_position_tolerance: 0.75
