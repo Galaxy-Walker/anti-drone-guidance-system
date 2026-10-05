@@ -18,7 +18,7 @@
 - `outputs/`：默认仿真输出目录（生成物不入库）。
 - [算法说明](docs/2d_simulation_guidance_overview.md)：算法原理与已有结果。
 - [视觉设计参考](docs/vision_design.md)：相机几何、进程协议与消息约定。
-- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：离线验证结果、2026-10-04 闭环复测与 2026-10-05 桌下遮挡扫参记录。
+- [视觉验证记录](docs/yolo_vision_closed_loop_results.md)：离线验证结果、2026-10-04 闭环复测、2026-10-05 桌下遮挡扫参与四算法对照记录。
 
 ## 纯 Python 仿真
 
