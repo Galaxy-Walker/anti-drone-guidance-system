@@ -88,7 +88,8 @@ from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_t
 # 视觉量测的 z 固定为目标平面高度；只估计 XY。
 VISION_UNKNOWN = math.nan
 
-# PID 参数默认值与离线 config.py 共用同一份 GuidanceConfig，避免 launch/YAML 与代码漂移。
+# PID 参数默认值与离线 config.py 共用同一份 GuidanceConfig，避免 launch/YAML 与代码漂移；
+# `pid` 与 `pid_nmpc` 共用这组参数（pid_nmpc 的 PID 输出是 EMPC 的名义参考）。
 _PID_DEFAULTS = GuidanceConfig()
 
 
@@ -611,8 +612,9 @@ class GuidanceNode(Node):
         *, target_reference: TargetState | None = None,
     ) -> None:
         """丢失/未初始化时的悬停：零速零加速度 setpoint，保持当前 yaw。"""
-        if self._algorithm == "pid":
-            # 丢失期间不保留旧误差积分，避免重新检测后旧积分推动追踪机偏离目标。
+        if self._algorithm in ("pid", "pid_nmpc"):
+            # 丢失期间不保留旧误差积分，避免重新检测后旧积分推动追踪机偏离目标；
+            # pid_nmpc 的积分同样通过 PID 名义参考影响 EMPC。
             self._memory.pid_integral.fill(0.0)
         self._record_sample(elapsed, np.zeros(3), snapshot)
         self._publish_target_setpoint(

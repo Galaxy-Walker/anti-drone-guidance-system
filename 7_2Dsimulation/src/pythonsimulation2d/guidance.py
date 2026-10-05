@@ -117,6 +117,12 @@ def compute_guidance(
     elif algorithm == "pn_nmpc":
         pn_trend = pn_guidance(pursuer, target, config)
         acceleration = nmpc_acceleration(pursuer, target, pn_trend, memory, config)
+    elif algorithm == "pid_nmpc":
+        # PID 名义参考 + EMPC 实际指令：PID 每个控制周期只调用一次（积分只累积一次），
+        # 其输出作为候选集合与 nmpc_w_pn 代价项的名义趋势；权重越大结果越接近纯 PID，
+        # 权重变小时 EMPC 才能用预测代价和 FOV 惩罚修正 PID 参考。
+        pid_trend = pid_guidance(pursuer, target, memory, config, dt)
+        acceleration = nmpc_acceleration(pursuer, target, pid_trend, memory, config)
     elif algorithm == "pn_mppi":
         pn_trend = pn_guidance(pursuer, target, config)
         acceleration = mppi_acceleration(pursuer, target, pn_trend, memory, config)
@@ -129,15 +135,16 @@ def compute_guidance(
 def nmpc_acceleration(
     pursuer: PursuerState,
     target_reference: TargetState,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     memory: GuidanceMemory,
     config: SimulationConfig,
 ) -> np.ndarray:
-    candidates = _candidate_accelerations(pursuer, target_reference, pn_trend, config)
+    """围绕名义参考趋势（PN 或 PID）枚举候选加速度，返回代价最低者。"""
+    candidates = _candidate_accelerations(pursuer, target_reference, reference_trend, config)
     best_cost = float("inf")
-    best_acceleration = pn_trend
+    best_acceleration = reference_trend
     for acceleration in candidates:
-        cost = _rollout_cost(pursuer, target_reference, acceleration, pn_trend, memory, config)
+        cost = _rollout_cost(pursuer, target_reference, acceleration, reference_trend, memory, config)
         if cost < best_cost:
             best_cost = cost
             best_acceleration = acceleration
@@ -246,7 +253,7 @@ def _clamp_rows_xy(vectors: np.ndarray, max_norm: float) -> np.ndarray:
 def _candidate_accelerations(
     pursuer: PursuerState,
     target: TargetState,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     config: SimulationConfig,
 ) -> list[np.ndarray]:
     guidance = config.guidance
@@ -275,22 +282,22 @@ def _candidate_accelerations(
         lateral = np.array([0.0, 1.0, 0.0])
 
     raw_candidates = [
-        pn_trend,
-        0.55 * pn_trend,
-        1.25 * pn_trend,
-        0.75 * pn_trend + 0.25 * intercept,
-        0.5 * pn_trend + 0.5 * intercept,
+        reference_trend,
+        0.55 * reference_trend,
+        1.25 * reference_trend,
+        0.75 * reference_trend + 0.25 * intercept,
+        0.5 * reference_trend + 0.5 * intercept,
         same_speed,
-        0.5 * pn_trend + 0.5 * same_speed,
+        0.5 * reference_trend + 0.5 * same_speed,
         velocity_match,
-        0.5 * pn_trend + 0.5 * velocity_match,
+        0.5 * reference_trend + 0.5 * velocity_match,
         stable_tracking,
         soft_tracking,
         velocity_tracking,
-        0.5 * pn_trend + 0.5 * stable_tracking,
-        0.35 * pn_trend + 0.65 * soft_tracking,
-        pn_trend + 0.35 * a_max * lateral,
-        pn_trend - 0.35 * a_max * lateral,
+        0.5 * reference_trend + 0.5 * stable_tracking,
+        0.35 * reference_trend + 0.65 * soft_tracking,
+        reference_trend + 0.35 * a_max * lateral,
+        reference_trend - 0.35 * a_max * lateral,
     ]
     return [clamp_norm_xy(candidate, a_max) for candidate in raw_candidates]
 
@@ -379,7 +386,7 @@ def _rollout_cost(
     pursuer: PursuerState,
     target: TargetState,
     acceleration: np.ndarray,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     memory: GuidanceMemory,
     config: SimulationConfig,
 ) -> float:
@@ -404,7 +411,7 @@ def _rollout_cost(
         path_cost += distance
         control_cost += norm_xy(acceleration) ** 2 * guidance.mpc_dt
         smooth_cost += norm_xy(acceleration - previous_acceleration) ** 2
-        pn_cost += norm_xy(acceleration - pn_trend) ** 2
+        pn_cost += norm_xy(acceleration - reference_trend) ** 2
         velocity_cost += norm_xy(relative_velocity) ** 2 * guidance.mpc_dt
         if guidance.nmpc_w_fov > 0.0:
             fov_cost += _fov_penalty(state.position, state.yaw, predicted_position, guidance)

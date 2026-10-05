@@ -8,7 +8,8 @@ import numpy as np
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # “定高俯瞰”的 2D 追踪仿真：状态数组仍保存 [x, y, z]，但控制律只使用 XY。
 SCENARIOS = ("stationary", "linear", "circle", "table_occlusion")
-ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc", "pid")
+# 新增算法一律追加在末尾：绘图按索引取色，插在中间会改变已有算法的配色。
+ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc", "pid", "pid_nmpc")
 
 ALGORITHM_LABELS = {
     "basic": "2D direct pursuit",
@@ -16,6 +17,7 @@ ALGORITHM_LABELS = {
     "pn_mppi": "2D PN + MPPI",
     "pn_nmpc": "2D PN + NMPC",
     "pid": "2D PID tracking",
+    "pid_nmpc": "2D PID + NMPC",
 }
 
 # 论文插图的面板标题：比 ALGORITHM_LABELS 更短，和正文表格里的叫法一致。
@@ -26,6 +28,7 @@ ALGORITHM_PANEL_LABELS = {
     "pn_mppi": "PN-guided MPPI",
     "pn_nmpc": "PN-guided E-MPC",
     "pid": "PID tracking",
+    "pid_nmpc": "PID-guided E-MPC",
 }
 
 
@@ -98,8 +101,9 @@ class GuidanceConfig:
     nmpc_w_path: float = 0.5
     nmpc_w_control: float = 0.015
     nmpc_w_smooth: float = 0.08
-    # 偏离 PN 趋势的惩罚：真实闭环下内部模型不可靠，权重提高让 NMPC 在拿不准时
-    # 跟随已被验证的 2D PN 趋势（候选集合里仍保留 pn_trend），避免自选动作持续失效。
+    # 偏离名义参考趋势的惩罚：真实闭环下内部模型不可靠，权重提高让 NMPC 在拿不准时
+    # 跟随已被验证的名义趋势（候选集合里仍保留 trend 本身），避免自选动作持续失效。
+    # `pn_nmpc` 的趋势是 2D PN；`pid_nmpc` 的趋势是单环 PID，此时该项惩罚“偏离 PID 参考”。
     nmpc_w_pn: float = 1.0
     # EMPC 画面保持（FOV）惩罚：把预测目标投影到固定下视相机的图像平面，
     # 归一化偏移（±1 为画面边缘）超过软边界后按平方惩罚，让目标贴近边缘时主动回中。

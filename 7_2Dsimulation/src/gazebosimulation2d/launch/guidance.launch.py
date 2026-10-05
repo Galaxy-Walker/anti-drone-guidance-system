@@ -43,7 +43,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("pursuer_fixed_altitude", default_value="8.0"),
         DeclareLaunchArgument("target_base_altitude", default_value="1.0"),
         DeclareLaunchArgument("target_speed_scale", default_value="1.0"),
-        # PID 参数：默认值与 pythonsimulation2d 的离线 GuidanceConfig 一致，闭环调参时覆盖。
+        # PID 参数：默认值与 pythonsimulation2d 的离线 GuidanceConfig 一致，闭环调参时覆盖；
+        # algorithm:=pid 时直接输出 PID，algorithm:=pid_nmpc 时作为 EMPC 的名义参考。
         DeclareLaunchArgument("pid_kp", default_value="2.5"),
         DeclareLaunchArgument("pid_ki", default_value="0.1"),
         DeclareLaunchArgument("pid_kd", default_value="2.6"),

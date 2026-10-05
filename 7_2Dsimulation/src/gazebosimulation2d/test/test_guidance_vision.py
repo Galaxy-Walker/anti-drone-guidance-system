@@ -506,6 +506,17 @@ class TestPidLifecycle:
         finally:
             node.destroy_node()
 
+    def test_hold_clears_integral_for_pid_nmpc(self) -> None:
+        # pid_nmpc 的 PID 积分通过名义参考进入 EMPC，丢失悬停时同样要清零。
+        node = make_node(algorithm="pid_nmpc")
+        try:
+            set_vehicle_states(node)
+            node._memory.pid_integral[:] = [1.0, -2.0, 0.0]
+            node._run_hold_cycle(timestamp=123, elapsed=2.0, snapshot=_VisionSnapshot())
+            np.testing.assert_array_equal(node._memory.pid_integral, np.zeros(3))
+        finally:
+            node.destroy_node()
+
 
 class TestRecording:
     @pytest.mark.parametrize("algorithm", ["pn", "pid"])
