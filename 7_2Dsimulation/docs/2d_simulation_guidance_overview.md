@@ -334,6 +334,8 @@ a_ref = sat_xy(kp e + ki I + kd e_v, a_max)
 
 `nmpc_w_path` 和 `nmpc_w_pn` 提高后，EMPC 更倾向在整个窗口内持续接近目标、并在内部模型不可靠时跟随已被验证的名义趋势（候选集合里保留参考本身；`pn_nmpc` 为 2D PN、`pid_nmpc` 为 PID 参考），代价是控制更激进、yaw rate mean 不再是最低项。
 
+`pn_k_close`、`pn_v_des_along_los` 与 `nmpc_w_pn` 也可通过 launch 覆盖（默认值与 `pythonsimulation2d/config.py` 一致）。其中 `pn_k_close` 默认值从 1.0 调整为 0.25：该增益让近距 $a_{\text{close}}$ 恒为推力、$a=0$ 不再是平衡点，视觉闭环会在目标附近形成 6 m/s² 满推力绕飞极限环（桌下遮挡场景实测）；降低后由 EMPC 的阻尼候选接管，绕飞消失，circle 闭环精度基本不变（0.72 vs 0.76 m）且控制能量降至约 1/7。第 10 节的离线对比表生成于旧默认值（1.0），重跑后 `pn_nmpc` 的能量与平均距离会进一步下降。
+
 EMPC 画面保持惩罚的相机参数采用追踪机下视相机的标称值：图像 1280×960、`fx = fy = 539.936 px`、安装高度偏移 0.10 m、目标控制平面 1.0 m；软边界 `fov_soft_margin = 0.5`，封顶 `fov_violation_cap = 3.0`（归一化偏移，1.0 为画面边缘）。这些参数与视觉链路（`vision_adapter` 的内参/外参）一致，更换相机或安装后需同步修改 `pythonsimulation2d/config.py` 中的 `fov_*` 默认值。
 
 ### 7.3 代价函数的通用形式

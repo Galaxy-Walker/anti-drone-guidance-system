@@ -165,6 +165,7 @@ param save                # 可选，参数变更后 PX4 会自动保存
 - `pursuer_fixed_altitude` 默认 8m，用于 2D 仿真配置和结果标注；当前追踪阶段不再通过 position setpoint 强制拉高度。
 - `target_speed_scale`（默认 1.0）只缩放目标机参考轨迹的速度：`circle` 缩放角速度（半径不变）、`linear` 缩放速度矢量、`table_occlusion` 缩放巡航速度（默认 0.5 m/s）、`stationary` 不受影响；起止点与控制算法参数不变。
 - PID 参数（`algorithm:=pid` 或 `pid_nmpc` 时生效）通过 launch 覆盖：`pid_kp`（默认 2.5）、`pid_ki`（0.1）、`pid_kd`（2.6）、`pid_integral_limit`（3.0 m·s，积分向量范数上限）；不传时与 `src/pythonsimulation2d/config.py` 的离线默认值一致，参数为负会在启动时报错。
+- PN/EMPC 参数（`algorithm:=pn`、`pn_mppi`、`pn_nmpc` 时生效；`pid_nmpc` 消费 `nmpc_w_pn`）通过 launch 覆盖：`pn_k_close`（默认 0.25）、`pn_v_des_along_los`（8.0）、`nmpc_w_pn`（1.0）；不传时与 `src/pythonsimulation2d/config.py` 的离线默认值一致，参数为负或非有限值会在启动时报错。
 
 PID 在 odometry 与视觉模式下均调用 `compute_guidance("pid", ...)`，不另设一套 ROS 控制算法；仅控制 XY，D 项使用目标与追踪机的相对速度。参数必须为有限非负数，launch 将其显式解析为浮点数（例如 `pid_ki:=0` 可关闭 I 项）。`pid_nmpc` 复用同一组参数与积分语义，只把 PID 输出作为 EMPC 的名义参考，见下文算法说明。
 
@@ -174,6 +175,12 @@ PID 在 odometry 与视觉模式下均调用 `compute_guidance("pid", ...)`，�
 | `pid_ki` | 0.1 | XY 位置误差积分增益 |
 | `pid_kd` | 2.6 | 相对速度误差增益 |
 | `pid_integral_limit` | 3.0 | XY 积分向量范数上限，单位 m·s |
+
+| PN/EMPC launch 参数 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `pn_k_close` | 0.25 | PN 趋势沿视线方向的主动接近增益；调小可消除近距满推力绕飞极限环 |
+| `pn_v_des_along_los` | 8.0 | PN 趋势期望闭合速度，单位 m/s |
+| `nmpc_w_pn` | 1.0 | EMPC 偏离名义趋势的惩罚权重：`pn_nmpc` 为 PN 趋势、`pid_nmpc` 为 PID 参考，越大越贴近参考 |
 
 开启 0.2s 周期 ROS 调试日志：
 

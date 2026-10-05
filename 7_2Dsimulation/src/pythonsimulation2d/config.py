@@ -86,7 +86,11 @@ class GuidanceConfig:
     # 2D PN 的 N 越大，横向修正越激进；太小会拦截慢，太大可能控制抖动。
     pn_navigation_constant: float = 3.5
     # k_close 和 v_des_along_los 给 PN 加一个沿水平视线方向的“主动接近”速度目标。
-    pn_k_close: float = 1.0
+    # k_close 从 1.0 降到 0.25：近距时该恒推力项让 a=0 不再是平衡点，视觉闭环会在目标
+    # 附近形成 6 m/s² 满推力绕飞极限环（table_occlusion 实测）。降低增益后由 EMPC 的
+    # 阻尼候选接管：桌下遮挡场景平均/最大误差从 1.16/4.78 m 降到 0.30~0.37/0.87~2.37 m，
+    # circle 闭环精度基本不变（0.72 vs 0.76 m）且控制能量降至约 1/7。
+    pn_k_close: float = 0.25
     pn_v_des_along_los: float = 8.0
     # NMPC/MPPI 预测窗口：8 步 * 0.1s = 向前看 0.8 秒。
     # 真实 PX4 闭环对加速度指令有明显滞后，窗口取 2s 时内部模型会高估自身机动能力、

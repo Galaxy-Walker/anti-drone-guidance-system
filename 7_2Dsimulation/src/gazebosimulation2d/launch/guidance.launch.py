@@ -49,6 +49,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("pid_ki", default_value="0.1"),
         DeclareLaunchArgument("pid_kd", default_value="2.6"),
         DeclareLaunchArgument("pid_integral_limit", default_value="3.0"),
+        # PN/EMPC 导引参数：默认值与 pythonsimulation2d 的离线 GuidanceConfig 一致；
+        # pn_k_close 调小用于消除近距满推力绕飞，nmpc_w_pn 越大越贴近名义趋势（pid_nmpc 为 PID 参考）。
+        DeclareLaunchArgument("pn_k_close", default_value="0.25"),
+        DeclareLaunchArgument("pn_v_des_along_los", default_value="8.0"),
+        DeclareLaunchArgument("nmpc_w_pn", default_value="1.0"),
         DeclareLaunchArgument("target_start_position_tolerance", default_value="0.75"),
         DeclareLaunchArgument("target_start_velocity_tolerance", default_value="0.75"),
         DeclareLaunchArgument("pursuer_takeoff_position_tolerance", default_value="0.75"),
@@ -157,6 +162,9 @@ def generate_launch_description() -> LaunchDescription:
                 "pid_ki": ParameterValue(LaunchConfiguration("pid_ki"), value_type=float),
                 "pid_kd": ParameterValue(LaunchConfiguration("pid_kd"), value_type=float),
                 "pid_integral_limit": ParameterValue(LaunchConfiguration("pid_integral_limit"), value_type=float),
+                "pn_k_close": ParameterValue(LaunchConfiguration("pn_k_close"), value_type=float),
+                "pn_v_des_along_los": ParameterValue(LaunchConfiguration("pn_v_des_along_los"), value_type=float),
+                "nmpc_w_pn": ParameterValue(LaunchConfiguration("nmpc_w_pn"), value_type=float),
                 "target_start_position_tolerance": LaunchConfiguration("target_start_position_tolerance"),
                 "target_start_velocity_tolerance": LaunchConfiguration("target_start_velocity_tolerance"),
                 "pursuer_takeoff_position_tolerance": LaunchConfiguration("pursuer_takeoff_position_tolerance"),

@@ -88,9 +88,10 @@ from gazebosimulation2d.sim_clock import SimClockGuard, create_sim_clock_guard_t
 # 视觉量测的 z 固定为目标平面高度；只估计 XY。
 VISION_UNKNOWN = math.nan
 
-# PID 参数默认值与离线 config.py 共用同一份 GuidanceConfig，避免 launch/YAML 与代码漂移；
-# `pid` 与 `pid_nmpc` 共用这组参数（pid_nmpc 的 PID 输出是 EMPC 的名义参考）。
-_PID_DEFAULTS = GuidanceConfig()
+# 导引参数默认值与离线 config.py 共用同一份 GuidanceConfig，避免 launch/YAML 与代码漂移；
+# PID 参数供 `pid` 与 `pid_nmpc` 使用，PN/EMPC 参数供 `pn`、`pn_mppi`、`pn_nmpc` 使用
+# （`pid_nmpc` 也消费 `nmpc_w_pn`，此时它表示“偏离 PID 参考”的惩罚）。
+_GUIDANCE_DEFAULTS = GuidanceConfig()
 
 
 @dataclass(slots=True)
@@ -276,10 +277,14 @@ class GuidanceNode(Node):
         self.declare_parameter("target_base_altitude", 1.0)
         self.declare_parameter("target_speed_scale", 1.0)
         # PID 导引参数：默认取离线 GuidanceConfig，可通过 launch 覆盖用于闭环调参。
-        self.declare_parameter("pid_kp", _PID_DEFAULTS.pid_kp)
-        self.declare_parameter("pid_ki", _PID_DEFAULTS.pid_ki)
-        self.declare_parameter("pid_kd", _PID_DEFAULTS.pid_kd)
-        self.declare_parameter("pid_integral_limit", _PID_DEFAULTS.pid_integral_limit)
+        self.declare_parameter("pid_kp", _GUIDANCE_DEFAULTS.pid_kp)
+        self.declare_parameter("pid_ki", _GUIDANCE_DEFAULTS.pid_ki)
+        self.declare_parameter("pid_kd", _GUIDANCE_DEFAULTS.pid_kd)
+        self.declare_parameter("pid_integral_limit", _GUIDANCE_DEFAULTS.pid_integral_limit)
+        # PN/EMPC 导引参数：默认取离线 GuidanceConfig，可通过 launch 覆盖用于闭环调参。
+        self.declare_parameter("pn_k_close", _GUIDANCE_DEFAULTS.pn_k_close)
+        self.declare_parameter("pn_v_des_along_los", _GUIDANCE_DEFAULTS.pn_v_des_along_los)
+        self.declare_parameter("nmpc_w_pn", _GUIDANCE_DEFAULTS.nmpc_w_pn)
         self.declare_parameter("target_start_position_tolerance", 0.75)
         self.declare_parameter("target_start_velocity_tolerance", 0.75)
         self.declare_parameter("pursuer_takeoff_position_tolerance", 0.75)
@@ -349,6 +354,19 @@ class GuidanceNode(Node):
         self._config.guidance.pid_ki = pid_values["pid_ki"]
         self._config.guidance.pid_kd = pid_values["pid_kd"]
         self._config.guidance.pid_integral_limit = pid_values["pid_integral_limit"]
+
+        # PN/EMPC 参数同样即使当前算法不用也校验，保证配置错误在启动时暴露。
+        pn_values = {
+            "pn_k_close": self._finite_float("pn_k_close"),
+            "pn_v_des_along_los": self._finite_float("pn_v_des_along_los"),
+            "nmpc_w_pn": self._finite_float("nmpc_w_pn"),
+        }
+        for name, value in pn_values.items():
+            if value < 0.0:
+                raise ValueError(f"{name} 不能为负")
+        self._config.guidance.pn_k_close = pn_values["pn_k_close"]
+        self._config.guidance.pn_v_des_along_los = pn_values["pn_v_des_along_los"]
+        self._config.guidance.nmpc_w_pn = pn_values["nmpc_w_pn"]
 
         self._target_base_altitude = float(self.get_parameter("target_base_altitude").value)
         self._config.target.fixed_altitude = self._target_base_altitude

@@ -175,6 +175,31 @@ class TestParameters:
         with pytest.raises(ValueError):
             make_node(**{name: value})
 
+    def test_pn_empc_parameters_default_to_offline_config(self) -> None:
+        node = make_node()
+        try:
+            defaults = GuidanceConfig()
+            assert node._config.guidance.pn_k_close == pytest.approx(defaults.pn_k_close)
+            assert node._config.guidance.pn_v_des_along_los == pytest.approx(defaults.pn_v_des_along_los)
+            assert node._config.guidance.nmpc_w_pn == pytest.approx(defaults.nmpc_w_pn)
+        finally:
+            node.destroy_node()
+
+    def test_pn_empc_parameters_override_guidance_defaults(self) -> None:
+        node = make_node(algorithm="pn_nmpc", pn_k_close=0.5, pn_v_des_along_los=4.0, nmpc_w_pn=0.3)
+        try:
+            assert node._config.guidance.pn_k_close == pytest.approx(0.5)
+            assert node._config.guidance.pn_v_des_along_los == pytest.approx(4.0)
+            assert node._config.guidance.nmpc_w_pn == pytest.approx(0.3)
+        finally:
+            node.destroy_node()
+
+    @pytest.mark.parametrize("name", ["pn_k_close", "pn_v_des_along_los", "nmpc_w_pn"])
+    @pytest.mark.parametrize("value", [-0.5, math.nan, math.inf])
+    def test_invalid_pn_empc_parameter_is_rejected(self, name, value) -> None:
+        with pytest.raises(ValueError):
+            make_node(**{name: value})
+
 
 class TestVisionTargetState:
     def make_vision_node(self, monkeypatch, **overrides):
@@ -382,8 +407,10 @@ class TestGuidanceWiring:
             assert len(node._pursuer_setpoint_pub.messages) == 1
             setpoint = node._pursuer_setpoint_pub.messages[0]
             # 估计目标在东北方向；odometry 真值只在 x 方向。NED 速度两个分量都应显著为正。
-            assert setpoint.velocity[0] > 0.1
-            assert setpoint.velocity[1] > 0.1
+            # 注意 pn_k_close 默认 0.25 时近距接近指令较小（约 2 m/s²），阈值按该量级取 0.05；
+            # 判别点是北向分量 >0（只有视觉估计的 y=4 才会产生），odometry 模式该分量约为 0。
+            assert setpoint.velocity[0] > 0.05
+            assert setpoint.velocity[1] > 0.05
             sample = node._record_samples[-1]
             assert sample.target_source == "vision"
             assert sample.vision_valid == 1.0
