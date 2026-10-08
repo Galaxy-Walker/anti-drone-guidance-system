@@ -1,6 +1,6 @@
 # guidance.py 导引算法参考资料汇总
 
-生成时间：2026-05-13
+生成时间：2026-05-13（后经更新，算法名与目标参考描述已与当前 `guidance.py` 对齐）
 
 源文件：`6_Simulation/src/pythonsimulation/guidance.py`
 
@@ -8,9 +8,9 @@
 
 | 代码入口 | 算法主题 | 参考资料侧重点 |
 | --- | --- | --- |
-| `direct_pursuit()` / `basic` | 直接追踪 / Pure Pursuit 风格速度指向目标 | 作为基线算法，通常用于和 PN、MPC 类方法对比 |
-| `pn_guidance()` / `pn` | Proportional Navigation, PN | 经典拦截导引律、LOS 角速度、closing speed |
-| `pn_fov` | PN + 视场约束 + last-seen 常速度预测 | FOV-constrained guidance、视觉伺服、目标丢失后的短期预测 |
+| `direct_pursuit()` / `basic`、`basic_fov` | 直接追踪 / Pure Pursuit 风格速度指向目标 | 作为基线算法，通常用于和 PN、MPC 类方法对比 |
+| `pn_guidance()` / `pn_fov` 系列 | Proportional Navigation, PN | 经典拦截导引律、LOS 角速度、closing speed |
+| `pn_fov` | PN + 视场约束 + α-β 滤波目标参考 | FOV-constrained guidance、视觉伺服、目标丢失后的短期预测 |
 | `fov_cbf_acceleration()` / `pn_fov_cbf` | PN 名义控制 + CBF 风格安全滤波 | 控制屏障函数、有限视场安全约束、视觉目标保持在 FOV 内 |
 | `mppi_acceleration()` / `pn_fov_mppi` | PN 名义序列 + MPPI 随机采样加权 | sampling-based MPC、Model Predictive Path Integral、并行 rollout |
 | `nmpc_acceleration()` / `pn_fov_nmpc` | PN 趋势附近滚动预测 / 轻量 NMPC | UAV target tracking、visibility constraint、obstacle / control constraints |
@@ -24,7 +24,7 @@
 | A | Grady Williams, Andrew Aldrich, Evangelos A. Theodorou, “Model Predictive Path Integral Control: From Theory to Parallel Computation,” JGCD 2017. DOI: `10.2514/1.G001921` | 论文 | 相关实现：https://github.com/UM-ARM-Lab/pytorch_mppi | `pn_fov_mppi` | MPPI 理论和并行实现的核心论文；代码里的随机控制序列、代价加权、temperature 对应 MPPI 思路。 |
 | A | UM-ARM-Lab/pytorch_mppi | 开源项目 | https://github.com/UM-ARM-Lab/pytorch_mppi | `pn_fov_mppi` | PyTorch MPPI 实现，MIT license，README 明确支持 approximate dynamics、control bounds、batch rollout。 |
 | A | Biagio Trimarchi, Fabrizio Schiano, Roberto Tron, “A Control Barrier Function Candidate for Quadrotors with Limited Field of View,” arXiv:2410.01277, 2024/2025. DOI: `10.48550/arXiv.2410.01277` | 论文 | 未发现官方代码 | `pn_fov_cbf`、FOV | 直接讨论 quadrotor 有限视场的 CBF 构造，和代码中 FOV 边界软约束/安全修正最接近。 |
-| A | Paul Zarchan, “Tactical and Strategic Missile Guidance,” AIAA, 6th/7th edition. DOI: `10.2514/4.868948` / `10.2514/4.105845` | 专著 | 无 | `pn` | PN/APN/导引闭环的经典工程参考。适合写算法背景和公式来源。 |
+| A | Paul Zarchan, “Tactical and Strategic Missile Guidance,” AIAA, 6th/7th edition. DOI: `10.2514/4.868948` / `10.2514/4.105845` | 专著 | 无 | `pn_guidance()` | PN/APN/导引闭环的经典工程参考。适合写算法背景和公式来源。 |
 
 ## PN / 直接追踪相关
 
@@ -48,7 +48,7 @@
 | Trimarchi, Schiano, Tron, “A Control Barrier Function Candidate for Quadrotors with Limited Field of View,” arXiv:2410.01277 | 论文 | https://arxiv.org/abs/2410.01277 | 将 FOV 约束显式写成 CBF 候选函数，适合作为 `pn_fov_cbf` 的主要参考。 |
 | Vision-based finite-time prescribed performance control for uncooperative aerial target tracking subject to field-of-view constraints, ISA Transactions 2024 | 论文 | ScienceDirect 可按题名检索 | 视觉跟踪 + FOV 约束，适合作为相关工作补充。 |
 
-代码备注：`_target_reference_for_fov()` 使用 last-seen position/velocity 的常速度预测。这不是完整滤波器，而是一个轻量级 target motion prediction；如果后续写论文，可以把它描述为 “constant-velocity prediction after target loss”。
+代码备注：`sensor_target_reference()` 使用 α-β 滤波（`alpha_beta_sensor_update()` / `alpha_beta_sensor_predict()`）估计目标位置和速度，目标丢失后由滤波器做常速度外推预测，并降低导引增益。写论文时可以描述为 “α-β filtering with constant-velocity prediction after target loss”。
 
 ## CBF 相关
 

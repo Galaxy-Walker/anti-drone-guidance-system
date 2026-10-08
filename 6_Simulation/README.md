@@ -63,12 +63,12 @@ uv run python main.py --scenario circle --export-mcap
 
 | 内部名称 | 图表名称 | 说明 |
 | --- | --- | --- |
-| `basic` | Direct pursuit | 追踪机始终朝目标当前位置飞行，作为最直观基线。 |
-| `pn` | 3D PN | 使用相对位置、相对速度和 LOS 角速率生成三维 PN 加速度。 |
-| `pn_fov` | PN + FOV | 加入视场约束，目标离开视场后使用 last-seen 匀速预测。 |
+| `basic` | Direct pursuit | 追踪机始终朝目标真实位置飞行（理想传感器，无 FOV 限制），作为最直观基线。 |
+| `basic_fov` | Direct pursuit + FOV | 在 Direct pursuit 上加入视场约束：目标参考来自深度相机量测经 α-β 滤波后的估计点。 |
+| `pn_fov` | PN + FOV | 使用相对位置、相对速度和 LOS 角速率生成三维 PN 加速度；目标离开视场后由 α-β 滤波器做常速度外推预测，并降低导引增益。 |
 | `pn_fov_cbf` | PN + FOV + CBF | 在接近 FOV 边界时加入控制屏障函数风格的侧向安全修正。 |
 | `pn_fov_mppi` | PN + FOV + MPPI | 基于 PN 名义控制序列随机采样多条控制序列，用指数权重融合第一步控制。 |
-| `pn_fov_nmpc` | PN + FOV + NMPC | 在 PN 趋势附近枚举候选加速度，滚动预测后选择综合代价最低的控制。 |
+| `pn_fov_nmpc` | PN + FOV + NMPC | 在 PN 趋势附近枚举候选加速度，滚动预测后选择综合代价最低的控制（文档中统称 EMPC，见 AGENTS.md）。 |
 
 > **📖 算法原理与设计分析**：各算法的详细原理、设计动机和对比分析见 [`docs/algorithm_framework_rationale.md`](docs/algorithm_framework_rationale.md)。整体仿真方法论见 [`docs/simulation_overview.md`](docs/simulation_overview.md)。
 
@@ -106,7 +106,7 @@ uv run python main.py --scenario circle --sim-time 5 --save-dir outputs_verify/c
 - `/<algorithm>/scene` 显示对应导引算法的追踪机、轨迹、机头方向和 LOS 线
 - `/<algorithm>/telemetry` 可绘制 `distance`、`visible`、`los_angle_deg`、`acceleration_norm`、`yaw_rate`
 
-不同导引算法通过 Foxglove 的 channel 开关自由选择，例如只打开 `/pn/scene` 和 `/pn_fov_mppi/scene` 即可对比这两个算法。
+不同导引算法通过 Foxglove 的 channel 开关自由选择，例如只打开 `/pn_fov/scene` 和 `/pn_fov_mppi/scene` 即可对比这两个算法。
 
 ## ROS2/PX4/Gazebo 双机接入
 
@@ -196,7 +196,7 @@ colcon build --base-paths src --packages-select gazebosimulation
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `algorithm` | `pn_fov_mppi` | 导引算法：`basic`、`pn`、`pn_fov`、`pn_fov_cbf`、`pn_fov_mppi`、`pn_fov_nmpc` |
+| `algorithm` | `pn_fov_mppi` | 导引算法：`basic`、`basic_fov`、`pn_fov`、`pn_fov_cbf`、`pn_fov_mppi`、`pn_fov_nmpc` |
 | `scenario` | `circle` | 目标场景：`stationary`、`linear`、`circle` |
 | `control_rate_hz` | `20.0` | 控制循环频率 |
 | `pursuer_namespace` | `/px4_1` | 追踪机 namespace |

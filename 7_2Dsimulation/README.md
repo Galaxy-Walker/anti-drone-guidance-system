@@ -12,7 +12,8 @@
 - `tools/vision_offline_eval.py`：YOLO 数据集离线评估（Recall、像素误差）。
 - `tools/prelabel_yolo_images.py`：合并相机截图，用已有权重生成供人工修正的 YOLO 预标注。
 - `tools/vision_live_view.py`：实时查看相机画面与检测框（发布标注图供 rqt_image_view）。
-- `tests/`：纯 Python 相机几何、目标估计器、EMPC 画面保持（FOV）惩罚、PID 导引与 PID + EMPC 混合测试。
+- `tools/px4_gcs_heartbeat.py`：纯标准库 GCS 心跳脚本，不接 QGC 时保留 PX4 的解锁前置检查。
+- `tests/`：纯 Python 相机几何、目标估计器、EMPC 画面保持（FOV）惩罚、PID 导引、PID + EMPC 混合与桌下遮挡场景测试。
 - `worlds/default.sdf`：视觉实验用无阴影 Gazebo 世界。
 - `worlds/table_occlusion.sdf`：桌下遮挡世界，配合 `scenario:=table_occlusion`。
 - `outputs/`：默认仿真输出目录（生成物不入库）。
@@ -499,6 +500,7 @@ uv run python tests/test_target_filter.py
 uv run python tests/test_fov_penalty.py
 uv run python tests/test_pid_guidance.py
 uv run python tests/test_pid_nmpc.py
+uv run python tests/test_table_occlusion.py
 ```
 
 ROS 节点测试（假 worker，不需要 torch/GPU）：

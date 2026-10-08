@@ -14,10 +14,12 @@
 | `4_fsm/` | 历史 | C++（`fsmpx4`）与 Python（`pixhawk_py`）两套 Offboard 状态机参考 |
 | `5_AntiDrone/` | **活跃** | PX4 Offboard + 3D PN 闭环拦截主实现，含安全状态机与 Gazebo 评估器 |
 | `6_Simulation/` | **活跃** | 3D 质点仿真（6 种算法横向对比）+ 双机 PX4 Gazebo 接入 + 算法文档 |
-| `7_2Dsimulation/` | **活跃** | 2D 定高俯瞰追踪仿真 + 2D Gazebo 接入 |
-| `8_MoCap/` | **活跃** | 动捕悬停/追踪/轨迹记录与回放（真机，部署到 Jetson 运行） |
+| `7_2Dsimulation/` | **主线** | 2D 定高俯瞰追踪 + YOLO 视觉闭环 + 桌下遮挡丢失重获（含离线仿真与 2D Gazebo 接入） |
+| `8_MoCap/` | **活跃** | 简单的动捕接入：动捕悬停/追踪/轨迹记录与回放（真机，部署到 Jetson 运行） |
 
 每个编号目录都有独立 `README.md`；`6_Simulation/docs/`、`7_2Dsimulation/docs/` 存放算法原理、公式推导和实测结果表。改动行为后同步更新对应文档。
+
+- **验证边界（写文档时保持一致）**：`7_2Dsimulation`（二维定高追踪 + YOLO 视觉闭环 + 桌下遮挡重获）是本仓库主线；三维链路（`5_AntiDrone` / `6_Simulation`）只在纯 Python 与 PX4 SITL + Gazebo 仿真中验证，**未做实机测试**；`8_MoCap` 只是简单的动捕接入，不是导引算法实机验证。受禁飞限制，没有室外实测，文档中“实测”默认指 Gazebo 仿真或室内动捕运行。
 
 ## 2. 环境与依赖规则
 
@@ -107,9 +109,9 @@ colcon test --packages-select px4_mocap_hover && colcon test-result --verbose
 
 - 算法/场景名单只在对应 `config.py` 的 `ALGORITHMS`、`SCENARIOS`、`ALGORITHM_LABELS` 中定义：
   - 6_Simulation：`basic`、`basic_fov`、`pn_fov`、`pn_fov_cbf`、`pn_fov_mppi`、`pn_fov_nmpc`
-  - 7_2Dsimulation：`basic`、`pn`、`pn_mppi`、`pn_nmpc`、`pid`
+  - 7_2Dsimulation：`basic`、`pn`、`pn_mppi`、`pn_nmpc`、`pid`、`pid_nmpc`
 - 新增算法必须同时更新：`config.py` → `guidance.compute_guidance()` 分支 → 标签/绘图 → launch 默认值与 README/文档。
-- **已知文档漂移**：`6_Simulation/README.md` 的算法表仍写作 `pn`（实际代码是 `basic_fov`），且部分描述停留在 last-seen 预测（现为 α-β 滤波）。改算法时以 `config.py` 与 `docs/` 为准，并顺手修正 README。
+- `6_Simulation/README.md` 的算法表已与 `config.py` 对齐（`basic_fov`、α-β 滤波目标参考）；改算法时仍以 `config.py` 与 `docs/` 为准，并顺手修正 README。
 - `pn_nmpc` / `nmpc_acceleration()` / `nmpc_w_*` 是历史代码标识，文档中把该候选枚举式控制器称为 **EMPC**（Enumerative MPC）。**不要重命名代码标识**（会破坏 CLI、输出目录与已生成图表），只在文档里注明二者等价。
 
 ### ROS 2 / PX4 约定
@@ -136,6 +138,5 @@ colcon test --packages-select px4_mocap_hover && colcon test-result --verbose
 ## 6. 硬性禁止
 
 - 禁止全局安装：Python 依赖用 uv，ROS 依赖走 rosdep/apt；禁止 `pip install` 到系统环境。
-- 仅允许使用 bun，禁止 npm / yarn / pnpm（本仓库当前无 JS 依赖）。
 - 禁止批量删除文件；只允许删除明确路径的单个/多个文件，批量删除需暂停并交由用户手动操作。
 - 禁止修改 `1_初期`~`4_fsm` 的历史代码，除非用户明确要求；`4_fsm` 的 `fsmpx4` 与 `pixhawk_py` 也**不可同时运行在同一 PX4 上**（指令冲突）。
