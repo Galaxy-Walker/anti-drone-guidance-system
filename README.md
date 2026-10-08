@@ -55,7 +55,7 @@ code/
 ├── 4_fsm/                  # Offboard 有限状态机（C++ 原版 + Python 迁移版）
 ├── 5_AntiDrone/            # PX4 Offboard + PN 闭环拦截（当前主线）
 ├── 6_Simulation/           # 轻量 3D 多算法对比仿真 + Gazebo 双机接入（当前主线）
-├── 7_2Dsimulation/         # 二维定高俯瞰追踪仿真
+├── 7_2Dsimulation/         # 二维定高追踪 + YOLO 视觉闭环与桌下遮挡重获场景
 ├── 8_MoCap/                # 室内动捕悬停与位姿桥接
 ├── pyproject.toml          # Python 项目配置与依赖
 ├── uv.lock                 # uv 依赖锁定文件
@@ -101,6 +101,7 @@ code/
 | 核心依赖 | NumPy >= 2.4, Matplotlib >= 3.10, Foxglove SDK >= 0.24 |
 | 中间件 | ROS 2 Jazzy |
 | 飞控 | PX4 Autopilot v1.16（SITL + Gazebo） |
+| 消息定义 | px4_msgs release/1.16（须与所用 PX4 版本一致，见 AGENTS.md） |
 | 通信桥 | Micro XRCE-DDS Agent |
 | 地面站 | QGroundControl |
 | 仿真器 | Gazebo |

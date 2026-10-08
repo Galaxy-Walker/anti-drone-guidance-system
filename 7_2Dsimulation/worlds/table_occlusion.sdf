@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  桌下遮挡实验：目标中心沿世界 ENU +X 从 (0,0,1) 飞至 (12,0,1)，
+  在桌子中心 (6,0,1) 实际停稳后悬停 3 秒。桌面 2x2m，下表面高 2.5m。
+  几何默认值对应 pythonsimulation2d.config.TableOcclusionConfig。
+  保留 default 世界名及无阴影配置，复用现有相机桥接话题。
+  Gazebo/PX4/XRCE Agent/QGC 均由使用者手动启动，详见 ../README.md。
+-->
+
+<sdf version="1.9">
+  <world name="default">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>false</shadows>
+    </scene>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1 1</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode/>
+            </friction>
+            <bounce/>
+            <contact/>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>500 500</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.8 0.8 0.8 1</specular>
+          </material>
+        </visual>
+        <pose>0 0 0 0 -0 0</pose>
+        <inertial>
+          <pose>0 0 0 0 -0 0</pose>
+          <mass>1</mass>
+          <inertia>
+            <ixx>1</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>1</iyy>
+            <iyz>0</iyz>
+            <izz>1</izz>
+          </inertia>
+        </inertial>
+        <enable_wind>false</enable_wind>
+      </link>
+      <pose>0 0 0 0 -0 0</pose>
+      <self_collide>false</self_collide>
+    </model>
+    <model name="occlusion_table">
+      <static>true</static>
+      <pose>6 0 0 0 0 0</pose>
+      <link name="top">
+        <pose>0 0 2.575 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>2 2 0.15</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2 2 0.15</size></box></geometry>
+          <material>
+            <ambient>0.45 0.28 0.12 1</ambient>
+            <diffuse>0.45 0.28 0.12 1</diffuse>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+      </link>
+      <link name="front_left">
+        <pose>0.9 0.9 1.25 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.25 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+      </link>
+      <link name="front_right">
+        <pose>0.9 -0.9 1.25 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.25 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+      </link>
+      <link name="back_left">
+        <pose>-0.9 0.9 1.25 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.25 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+      </link>
+      <link name="back_right">
+        <pose>-0.9 -0.9 1.25 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.12 0.12 2.5</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.25 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+      </link>
+    </model>
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 -0 0</pose>
+      <cast_shadows>false</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation>
+        <range>2000</range>
+        <linear>0</linear>
+        <constant>1</constant>
+        <quadratic>0</quadratic>
+      </attenuation>
+      <spot>
+        <inner_angle>0</inner_angle>
+        <outer_angle>0</outer_angle>
+        <falloff>0</falloff>
+      </spot>
+    </light>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg> 8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+  </world>
+</sdf>

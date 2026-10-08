@@ -4,10 +4,21 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pythonsimulation2d.config import SimulationConfig
+from pythonsimulation2d.config import GuidanceConfig, SimulationConfig
 from pythonsimulation2d.dynamics import step_pursuer
 from pythonsimulation2d.math_utils import EPS, clamp_norm_xy, norm_xy, normalize_xy
 from pythonsimulation2d.state import PursuerState, TargetState
+
+
+# 标称 x500_mono_cam_down 下视安装 R_{B←C}（相机 link 绕机体 y 轴 90°，见 docs/vision_design.md 1.1）：
+# 图像 u 轴（宽轴）沿机体 -y，v 轴（高轴）沿机体 -x，光轴沿机体 -z 向下。
+_NOMINAL_BODY_FROM_OPTICAL = np.array([
+    [0.0, -1.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0],
+])
+# 相机与目标平面距离小于该值时不计算画面偏移，避免投影退化。
+_FOV_MIN_DEPTH_M = 0.5
 
 
 @dataclass(slots=True)
@@ -15,6 +26,8 @@ class GuidanceMemory:
     # NMPC/MPPI 平滑项需要知道上一步实际使用的水平加速度。
     previous_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     mppi_rng: np.random.Generator | None = None
+    # PID 积分项：跨控制步累积 XY 位置误差，按 pid_integral_limit 限幅。
+    pid_integral: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
 
 @dataclass(slots=True)
@@ -51,6 +64,42 @@ def pn_guidance(pursuer: PursuerState, target: TargetState, config: SimulationCo
     return clamp_norm_xy(a_pn + a_close, config.pursuer.a_max)
 
 
+def pid_guidance(
+    pursuer: PursuerState,
+    target: TargetState,
+    memory: GuidanceMemory,
+    config: SimulationConfig,
+    dt: float,
+) -> np.ndarray:
+    """单环位置 PID：位置误差的 P/I/D 线性组合直接给出水平加速度指令。
+
+    - P 项 `kp * (p_t - p_p)`：把追踪机拉向目标当前位置；
+    - I 项 `ki * ∫(p_t - p_p) dt`：消除静止/匀速场景的稳态位置偏差；
+    - D 项 `kd * (v_t - v_p)`：以相对速度误差提供阻尼，等价于对位置误差求导；
+    - 积分向量按 `pid_integral_limit` 限范数抗饱和，输出再受 a_max 约束。
+
+    与 PN 类方法不同，该控制律不使用 LOS 角速度或预测模型，是纯反馈基线。
+    """
+    guidance = config.guidance
+    position_error = target.position - pursuer.position
+    velocity_error = target.velocity - pursuer.velocity
+
+    integral = memory.pid_integral.copy()
+    integral[:2] += position_error[:2] * dt
+    integral[2] = 0.0
+    integral_norm = norm_xy(integral)
+    if integral_norm > guidance.pid_integral_limit and integral_norm >= EPS:
+        integral[:2] *= guidance.pid_integral_limit / integral_norm
+    memory.pid_integral = integral
+
+    acceleration = (
+        guidance.pid_kp * position_error
+        + guidance.pid_ki * integral
+        + guidance.pid_kd * velocity_error
+    )
+    return clamp_norm_xy(acceleration, config.pursuer.a_max)
+
+
 def compute_guidance(
     algorithm: str,
     pursuer: PursuerState,
@@ -59,15 +108,21 @@ def compute_guidance(
     config: SimulationConfig,
     dt: float,
 ) -> GuidanceResult:
-    del dt  # 当前导引律的离散步长由 config.dt/guidance.mpc_dt 统一管理。
-
     if algorithm == "basic":
         acceleration = direct_pursuit(pursuer, target, config)
     elif algorithm == "pn":
         acceleration = pn_guidance(pursuer, target, config)
+    elif algorithm == "pid":
+        acceleration = pid_guidance(pursuer, target, memory, config, dt)
     elif algorithm == "pn_nmpc":
         pn_trend = pn_guidance(pursuer, target, config)
         acceleration = nmpc_acceleration(pursuer, target, pn_trend, memory, config)
+    elif algorithm == "pid_nmpc":
+        # PID 名义参考 + EMPC 实际指令：PID 每个控制周期只调用一次（积分只累积一次），
+        # 其输出作为候选集合与 nmpc_w_pn 代价项的名义趋势；权重越大结果越接近纯 PID，
+        # 权重变小时 EMPC 才能用预测代价和 FOV 惩罚修正 PID 参考。
+        pid_trend = pid_guidance(pursuer, target, memory, config, dt)
+        acceleration = nmpc_acceleration(pursuer, target, pid_trend, memory, config)
     elif algorithm == "pn_mppi":
         pn_trend = pn_guidance(pursuer, target, config)
         acceleration = mppi_acceleration(pursuer, target, pn_trend, memory, config)
@@ -80,15 +135,16 @@ def compute_guidance(
 def nmpc_acceleration(
     pursuer: PursuerState,
     target_reference: TargetState,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     memory: GuidanceMemory,
     config: SimulationConfig,
 ) -> np.ndarray:
-    candidates = _candidate_accelerations(pursuer, target_reference, pn_trend, config)
+    """围绕名义参考趋势（PN 或 PID）枚举候选加速度，返回代价最低者。"""
+    candidates = _candidate_accelerations(pursuer, target_reference, reference_trend, config)
     best_cost = float("inf")
-    best_acceleration = pn_trend
+    best_acceleration = reference_trend
     for acceleration in candidates:
-        cost = _rollout_cost(pursuer, target_reference, acceleration, pn_trend, memory, config)
+        cost = _rollout_cost(pursuer, target_reference, acceleration, reference_trend, memory, config)
         if cost < best_cost:
             best_cost = cost
             best_acceleration = acceleration
@@ -197,7 +253,7 @@ def _clamp_rows_xy(vectors: np.ndarray, max_norm: float) -> np.ndarray:
 def _candidate_accelerations(
     pursuer: PursuerState,
     target: TargetState,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     config: SimulationConfig,
 ) -> list[np.ndarray]:
     guidance = config.guidance
@@ -226,22 +282,22 @@ def _candidate_accelerations(
         lateral = np.array([0.0, 1.0, 0.0])
 
     raw_candidates = [
-        pn_trend,
-        0.55 * pn_trend,
-        1.25 * pn_trend,
-        0.75 * pn_trend + 0.25 * intercept,
-        0.5 * pn_trend + 0.5 * intercept,
+        reference_trend,
+        0.55 * reference_trend,
+        1.25 * reference_trend,
+        0.75 * reference_trend + 0.25 * intercept,
+        0.5 * reference_trend + 0.5 * intercept,
         same_speed,
-        0.5 * pn_trend + 0.5 * same_speed,
+        0.5 * reference_trend + 0.5 * same_speed,
         velocity_match,
-        0.5 * pn_trend + 0.5 * velocity_match,
+        0.5 * reference_trend + 0.5 * velocity_match,
         stable_tracking,
         soft_tracking,
         velocity_tracking,
-        0.5 * pn_trend + 0.5 * stable_tracking,
-        0.35 * pn_trend + 0.65 * soft_tracking,
-        pn_trend + 0.35 * a_max * lateral,
-        pn_trend - 0.35 * a_max * lateral,
+        0.5 * reference_trend + 0.5 * stable_tracking,
+        0.35 * reference_trend + 0.65 * soft_tracking,
+        reference_trend + 0.35 * a_max * lateral,
+        reference_trend - 0.35 * a_max * lateral,
     ]
     return [clamp_norm_xy(candidate, a_max) for candidate in raw_candidates]
 
@@ -256,11 +312,81 @@ def _predict_target_constant_acceleration(target: TargetState, t_pred: float) ->
     return predicted_position, predicted_velocity
 
 
+def _fov_normalized_offset(
+    position_enu: np.ndarray,
+    yaw_enu: float,
+    target_position_enu: np.ndarray,
+    guidance: GuidanceConfig,
+) -> np.ndarray | None:
+    """固定下视相机：目标相对画面的归一化偏移 `[u, v]`，±1 为图像边缘。
+
+    目标按 `fov_target_plane_z` 控制平面解释（与 vision_adapter 的反投影假设一致），
+    机体水平偏移先按 yaw 旋转到机体 FLU，再经标称安装转到光学系做针孔投影。
+    输入非法、相机在平面下方或对地高度过小时返回 `None`。
+    """
+    position = np.asarray(position_enu, dtype=float)
+    target = np.asarray(target_position_enu, dtype=float)
+    if position.shape != (3,) or target.shape != (3,):
+        return None
+    if not np.all(np.isfinite(position)) or not np.all(np.isfinite(target)) or not np.isfinite(yaw_enu):
+        return None
+    if guidance.fov_fx_px <= 0.0 or guidance.fov_fy_px <= 0.0:
+        return None
+    if guidance.fov_image_width_px <= 0 or guidance.fov_image_height_px <= 0:
+        return None
+
+    depth = position[2] + guidance.fov_camera_offset_z - guidance.fov_target_plane_z
+    if depth <= _FOV_MIN_DEPTH_M:
+        return None
+
+    delta_x = float(target[0] - position[0])
+    delta_y = float(target[1] - position[1])
+    cos_yaw = float(np.cos(yaw_enu))
+    sin_yaw = float(np.sin(yaw_enu))
+    # 安装平移 (0, 0, 0.1) 已在 depth 里计入，水平偏移不需要再平移。
+    offset_body = np.array([
+        cos_yaw * delta_x + sin_yaw * delta_y,
+        -sin_yaw * delta_x + cos_yaw * delta_y,
+        -depth,
+    ])
+    offset_camera = _NOMINAL_BODY_FROM_OPTICAL.T @ offset_body
+    depth_camera = float(offset_camera[2])
+    if depth_camera <= _FOV_MIN_DEPTH_M:
+        return None
+    return np.array([
+        guidance.fov_fx_px * offset_camera[0] / depth_camera / (0.5 * guidance.fov_image_width_px),
+        guidance.fov_fy_px * offset_camera[1] / depth_camera / (0.5 * guidance.fov_image_height_px),
+    ])
+
+
+def _fov_penalty(
+    position_enu: np.ndarray,
+    yaw_enu: float,
+    target_position_enu: np.ndarray,
+    guidance: GuidanceConfig,
+) -> float:
+    """EMPC 的 FOV 惩罚：画面偏移超过软边界后平方增长，边界外封顶后不再增大。
+
+    归一化偏移取 `max(|u|, |v|)`（矩形画幅）；软边界到画面边缘归一化为 1，
+    使 `nmpc_w_fov` 直接对应"目标压边"时的单步代价量级。
+    """
+    offset = _fov_normalized_offset(position_enu, yaw_enu, target_position_enu, guidance)
+    if offset is None:
+        return 0.0
+
+    max_offset = float(np.max(np.abs(offset)))
+    soft_margin = guidance.fov_soft_margin
+    if max_offset <= soft_margin:
+        return 0.0
+    violation = max(0.0, min(max_offset, guidance.fov_violation_cap) - soft_margin)
+    return (violation / max(1.0 - soft_margin, EPS)) ** 2
+
+
 def _rollout_cost(
     pursuer: PursuerState,
     target: TargetState,
     acceleration: np.ndarray,
-    pn_trend: np.ndarray,
+    reference_trend: np.ndarray,
     memory: GuidanceMemory,
     config: SimulationConfig,
 ) -> float:
@@ -273,6 +399,7 @@ def _rollout_cost(
     pn_cost = 0.0
     velocity_cost = 0.0
     steady_cost = 0.0
+    fov_cost = 0.0
 
     for step in range(1, guidance.horizon_steps + 1):
         t_pred = step * guidance.mpc_dt
@@ -284,8 +411,10 @@ def _rollout_cost(
         path_cost += distance
         control_cost += norm_xy(acceleration) ** 2 * guidance.mpc_dt
         smooth_cost += norm_xy(acceleration - previous_acceleration) ** 2
-        pn_cost += norm_xy(acceleration - pn_trend) ** 2
+        pn_cost += norm_xy(acceleration - reference_trend) ** 2
         velocity_cost += norm_xy(relative_velocity) ** 2 * guidance.mpc_dt
+        if guidance.nmpc_w_fov > 0.0:
+            fov_cost += _fov_penalty(state.position, state.yaw, predicted_position, guidance)
         if step > guidance.horizon_steps // 2:
             steady_cost += distance**2 + 0.35 * norm_xy(relative_velocity) ** 2
         previous_acceleration = acceleration
@@ -305,4 +434,5 @@ def _rollout_cost(
         + guidance.nmpc_w_control * control_cost
         + guidance.nmpc_w_smooth * smooth_cost
         + guidance.nmpc_w_pn * pn_cost
+        + guidance.nmpc_w_fov * fov_cost
     )

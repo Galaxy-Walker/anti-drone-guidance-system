@@ -10,4 +10,5 @@ __all__ = [
     "simulation",
     "metrics",
     "plotting",
+    "camera_geometry",
 ]

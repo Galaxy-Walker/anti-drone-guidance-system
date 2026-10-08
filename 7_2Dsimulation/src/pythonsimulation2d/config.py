@@ -7,14 +7,28 @@ import numpy as np
 
 # 这里集中定义合法场景和算法名称，CLI、仿真循环、绘图和指标输出都复用它们。
 # “定高俯瞰”的 2D 追踪仿真：状态数组仍保存 [x, y, z]，但控制律只使用 XY。
-SCENARIOS = ("stationary", "linear", "circle")
-ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc")
+SCENARIOS = ("stationary", "linear", "circle", "table_occlusion")
+# 新增算法一律追加在末尾：绘图按索引取色，插在中间会改变已有算法的配色。
+ALGORITHMS = ("basic", "pn", "pn_mppi", "pn_nmpc", "pid", "pid_nmpc")
 
 ALGORITHM_LABELS = {
     "basic": "2D direct pursuit",
     "pn": "2D PN",
     "pn_mppi": "2D PN + MPPI",
     "pn_nmpc": "2D PN + NMPC",
+    "pid": "2D PID tracking",
+    "pid_nmpc": "2D PID + NMPC",
+}
+
+# 论文插图的面板标题：比 ALGORITHM_LABELS 更短，和正文表格里的叫法一致。
+# 其中 pn_nmpc 在文档中统称 EMPC（Enumerative MPC），代码标识保持不变，见 AGENTS.md。
+ALGORITHM_PANEL_LABELS = {
+    "basic": "Direct Pursuit",
+    "pn": "PN-only",
+    "pn_mppi": "PN-guided MPPI",
+    "pn_nmpc": "PN-guided E-MPC",
+    "pid": "PID tracking",
+    "pid_nmpc": "PID-guided E-MPC",
 }
 
 
@@ -34,6 +48,24 @@ class PursuerConfig:
 
 
 @dataclass(slots=True)
+class TableOcclusionConfig:
+    # 几何与 worlds/table_occlusion.sdf 对应；遮挡区间按目标实际位置判断，不按参考时间猜测。
+    center_x: float = 6.0
+    center_y: float = 0.0
+    length: float = 2.0
+    width: float = 2.0
+    underside_height: float = 2.5
+    start_x: float = 0.0
+    end_x: float = 12.0
+    speed: float = 0.5
+    acceleration: float = 0.5
+    hover_s: float = 3.0
+    # 这是目标机任务阶段的停稳检查，不是追踪重获成功判据。
+    position_tolerance: float = 0.15
+    velocity_tolerance: float = 0.10
+
+
+@dataclass(slots=True)
 class TargetConfig:
     # 目标固定在离地 1m；轨迹只在 XY 平面运动。
     fixed_altitude: float = 1.0
@@ -43,6 +75,7 @@ class TargetConfig:
     circle_center: np.ndarray = field(default_factory=lambda: np.array([35.0, 0.0, 1.0]))
     circle_radius: float = 12.0
     circle_omega: float = 0.25
+    table: TableOcclusionConfig = field(default_factory=TableOcclusionConfig)
 
 
 @dataclass(slots=True)
@@ -53,22 +86,62 @@ class GuidanceConfig:
     # 2D PN 的 N 越大，横向修正越激进；太小会拦截慢，太大可能控制抖动。
     pn_navigation_constant: float = 3.5
     # k_close 和 v_des_along_los 给 PN 加一个沿水平视线方向的“主动接近”速度目标。
-    pn_k_close: float = 1.0
+    # k_close 从 1.0 降到 0.25：近距时该恒推力项让 a=0 不再是平衡点，视觉闭环会在目标
+    # 附近形成 6 m/s² 满推力绕飞极限环（table_occlusion 实测）。降低增益后由 EMPC 的
+    # 阻尼候选接管：桌下遮挡场景平均/最大误差从 1.16/4.78 m 降到 0.30~0.37/0.87~2.37 m，
+    # circle 闭环精度基本不变（0.72 vs 0.76 m）且控制能量降至约 1/7。
+    pn_k_close: float = 0.25
     pn_v_des_along_los: float = 8.0
-    # NMPC/MPPI 预测窗口：20 步 * 0.1s = 向前看 2 秒；窗口越长越慢。
-    horizon_steps: int = 20
+    # NMPC/MPPI 预测窗口：8 步 * 0.1s = 向前看 0.8 秒。
+    # 真实 PX4 闭环对加速度指令有明显滞后，窗口取 2s 时内部模型会高估自身机动能力、
+    # 预判"激进候选会飞过目标"而反复选择偏保守的小修正，视觉闭环里容易停在外侧
+    # 大半径轨道上（实测水平误差可到 6.8m）；缩短到与执行器动态同量级后，
+    # 候选选择更贴近真实响应，配合下面的 PN 权重可以把闭环误差压回捕获半径附近。
+    horizon_steps: int = 8
     mpc_dt: float = 0.1
     # 下面的权重共同决定预测控制的取舍：距离项让它追上目标，控制项和平滑项抑制剧烈机动。
     nmpc_w_dist: float = 12.0
-    nmpc_w_path: float = 0.1
+    # 路径代价权重：积分整个预测窗口的距离，权重越大越鼓励持续接近而不是只看窗口末端。
+    nmpc_w_path: float = 0.5
     nmpc_w_control: float = 0.015
     nmpc_w_smooth: float = 0.08
-    nmpc_w_pn: float = 0.04
+    # 偏离名义参考趋势的惩罚：真实闭环下内部模型不可靠，权重提高让 NMPC 在拿不准时
+    # 跟随已被验证的名义趋势（候选集合里仍保留 trend 本身），避免自选动作持续失效。
+    # `pn_nmpc` 的趋势是 2D PN；`pid_nmpc` 的趋势是单环 PID，此时该项惩罚“偏离 PID 参考”。
+    nmpc_w_pn: float = 1.0
+    # EMPC 画面保持（FOV）惩罚：把预测目标投影到固定下视相机的图像平面，
+    # 归一化偏移（±1 为画面边缘）超过软边界后按平方惩罚，让目标贴近边缘时主动回中。
+    # 相机模型采用 x500_mono_cam_down 的标称下视安装与 P1 核验内参，见 docs/vision_design.md 1.1；
+    # 更换相机或安装外参后需同步更新这些默认值。
+    fov_image_width_px: int = 1280
+    fov_image_height_px: int = 960
+    fov_fx_px: float = 539.936
+    fov_fy_px: float = 539.936
+    # 相机相对机体的安装高度与目标控制平面高度，两者之差决定成像对地高度。
+    fov_camera_offset_z: float = 0.10
+    fov_target_plane_z: float = 1.0
+    # 偏移小于 soft_margin 不惩罚；超过 violation_cap 后惩罚封顶，
+    # 避免远距离接近段（49 m 外 max|offset| 可达 7）压过距离代价。
+    fov_soft_margin: float = 0.5
+    fov_violation_cap: float = 3.0
+    # 边界处（max|offset| = 1）单步惩罚归一化为 1，权重越大越积极回中。
+    nmpc_w_fov: float = 120.0
     # MPPI 采样式预测控制参数；采样数越大越稳但越慢，seed 保证对比可复现。
     mppi_samples: int = 48
     mppi_noise_scale: float = 2.5
     mppi_temperature: float = 6.0
     mppi_seed: int = 7
+    # 单环位置 PID：对 XY 位置误差做比例-积分-微分，D 项直接取相对速度误差
+    # （v_t - v_p，等价于位置误差的导数），输出水平加速度。
+    # 不显式引入目标加速度前馈，保证与不预测目标机动的基线口径一致。
+    # 默认值在三种离线场景上网格整定，取 kp/kd 使闭环近似二阶系统
+    # ω_n = sqrt(kp) ≈ 1.58 rad/s、ζ = kd/(2 sqrt(kp)) ≈ 0.82；ki 只做慢速偏置消除。
+    pid_kp: float = 2.5
+    pid_ki: float = 0.1
+    pid_kd: float = 2.6
+    # 积分向量范数上限（单位 m*s），作为抗饱和：接近段大误差持续时间长，
+    # 不限制积分会在进入捕获半径后产生明显过冲。
+    pid_integral_limit: float = 3.0
 
 
 @dataclass(slots=True)

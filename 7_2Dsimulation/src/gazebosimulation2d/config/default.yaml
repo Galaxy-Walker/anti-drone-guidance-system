@@ -7,6 +7,9 @@ guidance_node_2d:
 
     pursuer_namespace: /px4_1
     target_namespace: /px4_2
+    # 两机本地原点的世界 ENU XY；必须与外部 PX4_GZ_MODEL_POSE 的 XY 对应。
+    pursuer_origin_xy: [0.0, 0.0]
+    target_origin_xy: [0.0, 0.0]
 
     auto_arm: true
     auto_offboard: true
@@ -21,6 +24,21 @@ guidance_node_2d:
     # Gazebo 目标机固定在离地 1m，ENU z 正向向上。
     target_base_altitude: 1.0
 
+    # 目标参考轨迹速度缩放：circle 缩放角速度（半径不变）、linear 缩放速度矢量、table_occlusion 缩放巡航速度，默认 1.0 与原轨迹一致。
+    target_speed_scale: 1.0
+
+    # 单环位置 PID 参数（algorithm=pid 或 pid_nmpc 时生效）；默认值与 src/pythonsimulation2d/config.py 一致。
+    pid_kp: 2.5
+    pid_ki: 0.1
+    pid_kd: 2.6
+    pid_integral_limit: 3.0
+
+    # PN/EMPC 导引参数（pn / pn_mppi / pn_nmpc 生效；pid_nmpc 的 nmpc_w_pn 表示偏离 PID 参考的惩罚）；
+    # 默认值与 src/pythonsimulation2d/config.py 一致，可通过 launch 覆盖用于闭环调参。
+    pn_k_close: 0.25
+    pn_v_des_along_los: 8.0
+    nmpc_w_pn: 1.0
+
     target_start_position_tolerance: 0.75
     target_start_velocity_tolerance: 0.75
     pursuer_takeoff_position_tolerance: 0.75
@@ -30,8 +48,108 @@ guidance_node_2d:
     target_system_id: 2
 
     record_data: true
+    # CSV 相对路径以 7_2Dsimulation 为基准，不受启动目录影响；也可填写绝对路径。
     record_output_dir: outputs/gazebo2d
 
     debug_log: false
     debug_log_period_s: 0.2
     startup_log_period_s: 1.0
+
+    # 导引输入来源；默认 odometry，行为与接入视觉前一致。
+    target_source: odometry
+    vision_topic: /vision/target_pose
+    # 本轮不允许回退 odometry（odometry 值预留给后续远距离捕获，设置会直接报错）。
+    vision_fallback: none
+    vision_max_age_s: 0.5
+    # α-β 估计器与丢失状态机，参数含义见 README.md 的导引节点视觉参数表。
+    vision_alpha: 0.85
+    vision_beta: 0.25
+    vision_accel_tau_s: 0.5
+    vision_gate_sigma: 0.0
+    vision_coast_s: 0.3
+    vision_loss_s: 1.0
+    vision_hold_on_loss: true
+    min_dt_s: 0.01
+    max_dt_s: 0.5
+
+# 视觉适配节点：off 时不创建；truth 用 odometry 伪检测；yolo 消费 /camera/detections。
+vision_adapter:
+  ros__parameters:
+    vision_source: off
+    pursuer_namespace: /px4_1
+    target_namespace: /px4_2
+    # 两机本地原点的世界 ENU XY；必须与外部 PX4_GZ_MODEL_POSE 的 XY 对应。
+    pursuer_origin_xy: [0.0, 0.0]
+    target_origin_xy: [0.0, 0.0]
+
+    # P1 核验后填写的桥接光学系 frame；与 camera_bridge.yaml 的 frame_id 一致。
+    camera_frame_id: camera_link_optical
+
+    # 目标控制高度映射到公共 ENU 平面；两机原点不一致时不能直接复用该数值。
+    target_base_altitude: 1.0
+
+    # 相机 link 相对机体 FLU 的安装平移和安装旋转（rpy 单位：度）。
+    # 标称值来自 PX4 x500_mono_cam_down 的 SDF 合并结果，完整链见 docs/vision_design.md 第 1 节。
+    camera_mount_xyz: [0.0, 0.0, 0.10]
+    camera_mount_rpy_deg: [0.0, 90.0, 0.0]
+
+    # truth 伪检测使用独立定时器，不要求与图像同频。
+    truth_rate_hz: 10.0
+
+    # 接收时间新鲜度和两机配对容差；truth 模式的近似，不宣称采样同步。
+    pose_timeout_s: 0.2
+    pose_pair_tolerance_s: 0.05
+
+    # 协方差假设：像素噪声和目标平面高度不确定度，不代表实际添加了随机噪声。
+    pixel_noise_px: 3.0
+    target_plane_sigma_m: 0.1
+
+    vision_record_data: true
+    # 相对 7_2Dsimulation 解析，绝对路径保持不变。
+    vision_record_output_dir: outputs/gazebo2d_vision
+
+    debug_log: false
+    debug_log_period_s: 0.5
+
+    # yolo 模式：图像 stamp 驱动的位姿缓存插值与检测门限。
+    min_score: 0.25
+    pose_match_tolerance_s: 0.05
+    pose_cache_max_age_s: 0.5
+    pose_cache_interpolate: true
+    extrapolate_pose: false
+
+    # 数据集录制（默认关闭）：frames 由 vision_detector 写，labels 由本节点写真值框。
+    record_dataset: false
+    dataset_output_dir: outputs/gazebo2d_vision/dataset
+    dataset_label_box_size_m: 0.35
+
+# YOLO 检测节点：只在 vision_source=yolo 时创建；推理在 conda worker 子进程完成。
+vision_detector:
+  ros__parameters:
+    camera_frame_id: camera_link_optical
+    # 必须由使用者提供 conda ultralytics 环境的 python；留空会直接报错退出。
+    yolo_python: ""
+    # 留空表示使用包内 share/gazebosimulation2d/scripts/yolo_worker.py。
+    yolo_worker_script: ""
+    model_path: ""
+    model_fallback_path: ""
+    imgsz: 640
+    conf: 0.25
+    iou: 0.7
+    device: "0"
+    half: true
+    max_det: 5
+    class_name: uav
+    process_hz: 10.0
+    max_frame_age_s: 0.2
+    frame_format: raw
+    inference_timeout_s: 1.0
+    worker_startup_timeout_s: 30.0
+    worker_restart_limit: 3
+    # 数据集录制：0 关闭；frames/<stamp_ns>.jpg 由本节点落盘。
+    save_frame_hz: 0.0
+    dataset_output_dir: outputs/gazebo2d_vision/dataset
+    # 相对 7_2Dsimulation 解析，绝对路径保持不变。
+    stats_csv: outputs/gazebo2d_vision/yolo_detections.csv
+    debug_log: false
+    debug_log_period_s: 1.0
